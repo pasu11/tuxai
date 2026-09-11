@@ -1,6 +1,6 @@
 # TuxAI
 
-TuxAI is an open-source AI assistant browser extension for Chrome, Vivaldi, and Firefox.
+TuxAI is an open-source AI assistant browser extension for Chrome and Firefox.
 
 It provides:
 
