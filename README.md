@@ -195,6 +195,10 @@ dist/chrome                # Generated Chrome/Vivaldi package
 dist/firefox               # Generated Firefox package
 ```
 
+#Screenshots
+![alt text]([https://github.com/pasu11/tuxai/main/screenshots/01_70.jpg](https://github.com/pasu11/tuxai/blob/main/screenshots/01_70.jpg?raw=true)
+
+
 ## Privacy
 
 > **Important:** These privacy statements apply when you use TuxAI with **your own local server**. They **do not apply when you use cloud services** such as OpenAI or DeepSeek. If you connect to a cloud provider, your data is sent to that provider and their terms/privacy policy apply.
