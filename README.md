@@ -195,8 +195,7 @@ dist/chrome                # Generated Chrome/Vivaldi package
 dist/firefox               # Generated Firefox package
 ```
 
-#Screenshots
-![alt text]([https://github.com/pasu11/tuxai/main/screenshots/01.jpg](https://github.com/pasu11/tuxai/blob/main/screenshots/01.jpg?raw=true)
+<img width="1920" height="1080" alt="image" src="https://github.com/pasu11/tuxai/blob/main/screenshots/01.jpg" />
 
 
 ## Privacy
