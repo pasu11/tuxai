@@ -1,6 +1,6 @@
-# TuxAI
+# Tuxai
 
-TuxAI is an open-source AI assistant browser extension for Chrome, Vivaldi, and Firefox.
+Tuxai is an open-source AI assistant browser extension for Chrome, Vivaldi, and Firefox.
 
 It provides:
 
@@ -96,7 +96,7 @@ npm run build:firefox
 
 ### 1. Choose a connection
 
-Open the TuxAI sidebar and click the settings icon.
+Open the Tuxai sidebar and click the settings icon.
 
 #### Local Server mode
 
@@ -135,7 +135,7 @@ Open the TuxAI sidebar and click the settings icon.
 By default, holding **Alt** while selecting text opens a small popup:
 
 1. Select text while holding **Alt** (or another configured shortcut).
-2. The TuxAI popup appears.
+2. The Tuxai popup appears.
 3. Click a tool, for example **翻译** or **总结**.
 4. The result is shown directly in the popup.
 
@@ -149,7 +149,7 @@ Settings → Quick select popup
 
 1. Select text on a page.
 2. Right-click it.
-3. Choose **TuxAI**.
+3. Choose **Tuxai**.
 4. Select a tool.
 
 The selected text is sent to the sidebar and the tool runs there.
@@ -197,9 +197,9 @@ dist/firefox               # Generated Firefox package
 
 ## Privacy
 
-> **Important:** These privacy statements apply when you use TuxAI with **your own local server**. They **do not apply when you use cloud services** such as OpenAI or DeepSeek. If you connect to a cloud provider, your data is sent to that provider and their terms/privacy policy apply.
+> **Important:** These privacy statements apply when you use Tuxai with **your own local server**. They **do not apply when you use cloud services** such as OpenAI or DeepSeek. If you connect to a cloud provider, your data is sent to that provider and their terms/privacy policy apply.
 
-TuxAI has no central server and does not track, store telemetry, or use analytics.
+Tuxai has no central server and does not track, store telemetry, or use analytics.
 
 See the full [PRIVACY.md](PRIVACY.md) for details.
 
@@ -212,11 +212,11 @@ See the full [PRIVACY.md](PRIVACY.md) for details.
 
 This add-on was created with the help of **DeepSeek DeepCode** (AI-assisted development).
 
-TuxAI is an independent open-source project.
+Tuxai is an independent open-source project.
 
 ## License
 
-TuxAI is released into the public domain under **The Unlicense**.
+Tuxai is released into the public domain under **The Unlicense**.
 
 You can use, modify, distribute, sell, or embed it for any purpose,
 commercial or non-commercial, without limitation.

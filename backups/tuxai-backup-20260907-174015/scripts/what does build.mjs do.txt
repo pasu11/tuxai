@@ -1,0 +1,84 @@
+   ## 1. It makes two fresh folders
+
+   Every time you run it, it deletes the old outputs and creates:
+
+   dist/chrome/
+   dist/firefox/
+
+   This prevents old files from being left behind.
+
+   ## 2. Chrome build = mostly copying
+
+   Chrome/Vivaldi already support the source files as-is, so the script simply copies
+   these folders/files into dist/chrome:
+
+   manifest.json
+   background.js
+   lib/
+   content/
+   sidebar/
+   icons/
+
+   No rewriting needed — Chrome is the "native" format of the source.
+
+   ## 3. Firefox build = same files, but with two changes
+
+   The script copies the same files into dist/firefox, but then changes two things:
+
+   ### Change 1: Swaps the manifest
+
+   It replaces manifest.json with manifest.firefox.json.
+
+   Why? Because Chrome and Firefox need different extension definitions:
+
+   ┌────────────┬─────────────────────────┬──────────────────────────────────────┐
+   │            │ Chrome/Vivaldi manifest │ Firefox manifest                     │
+   ├────────────┼─────────────────────────┼──────────────────────────────────────┤
+   │ Sidebar    │ `side_panel`            │ `sidebar_action`                     │
+   ├────────────┼─────────────────────────┼──────────────────────────────────────┤
+   │ Background │ service worker + module │ background scripts                   │
+   ├────────────┼─────────────────────────┼──────────────────────────────────────┤
+   │ Browser ID │ not needed              │ `browser_specific_settings.gecko.id` │
+   └────────────┴─────────────────────────┴──────────────────────────────────────┘
+
+   ### Change 2: "Bundles" the background code
+
+   Your normal source background.js contains an import statement:
+
+   [js]
+   import { getEffectiveTools, ... } from "./lib/tools.js";
+
+   Chrome supports this because its background is a module.
+
+   Firefox background scripts in this build are classic scripts, which don't handle
+   module import statements the same way.
+
+   So the build script:
+
+   1. Reads lib/tools.js
+   2. Removes its export keywords so it can run as a normal script
+   3. Reads background.js
+   4. Removes the import line
+   5. Joins both files into one background.js file for Firefox
+
+   That's why the Firefox background.js is bigger — it's not duplicated by hand; it's
+   generated automatically from two source files.
+
+   ## 4. Everything else stays the same
+
+   Files like:
+
+   - sidebar/sidebar.html
+   - sidebar/sidebar.js
+   - sidebar/sidebar.css
+   - content/quickselect.js
+   - icons/
+
+   work in both browsers without modification, so the build script only copies them.
+
+   ## In one sentence
+
+   │ The build script keeps Chrome/Vivaldi as a normal copy, and for Firefox it swaps 
+   the manifest and combines background.js + lib/tools.js into a single 
+   Firefox-compatible background file.
+
