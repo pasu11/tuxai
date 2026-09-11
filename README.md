@@ -16,14 +16,14 @@ It provides:
 
 ## Requirements
 
-- Chrome, Chromium, Vivaldi, Edge, or another Chromium browser
+- Chrome, Firefox, Chromium, Vivaldi, or another Chromium/Firefox based browser
 - Firefox 115+ (for the Firefox build)
 - For local-server mode: a running LLM server such as Ollama, kobold.cpp, llama.cpp, or another OpenAI-compatible server
 - For cloud mode: an API key for OpenAI, DeepSeek, or another OpenAI-compatible cloud endpoint
 
 ## Install
 
-### Chrome / Vivaldi / Chromium
+### Chrome / Firefox
 
 #### Option A: Load the built folder
 
