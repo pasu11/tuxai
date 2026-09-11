@@ -14,6 +14,8 @@ It provides:
 - Light/dark theme
 - Adjustable text size
 
+<img width="1920" height="1080" alt="image" src="https://github.com/pasu11/tuxai/blob/main/screenshots/01.jpg" />
+
 ## Requirements
 
 - Chrome, Firefox, Chromium, Vivaldi, or another Chromium/Firefox based browser
@@ -194,8 +196,6 @@ scripts/build.mjs          # Build script
 dist/chrome                # Generated Chrome/Vivaldi package
 dist/firefox               # Generated Firefox package
 ```
-
-<img width="1920" height="1080" alt="image" src="https://github.com/pasu11/tuxai/blob/main/screenshots/01.jpg" />
 
 
 ## Privacy
