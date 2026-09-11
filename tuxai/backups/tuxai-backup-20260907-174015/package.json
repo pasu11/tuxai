@@ -1,0 +1,15 @@
+{
+  "name": "tuxai",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Unlicense",
+  "type": "module",
+  "description": "Clean source-based Chrome/Vivaldi/Firefox extension: Tuxai (local server + cloud chat).",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:chrome": "node scripts/build.mjs --chrome",
+    "build:firefox": "node scripts/build.mjs --firefox",
+    "package": "node scripts/build.mjs && node scripts/package.mjs",
+    "package:only": "node scripts/package.mjs"
+  }
+}
