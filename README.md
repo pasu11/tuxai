@@ -196,7 +196,7 @@ dist/firefox               # Generated Firefox package
 ```
 
 #Screenshots
-![alt text]([https://github.com/pasu11/tuxai/main/screenshots/01_70.jpg](https://github.com/pasu11/tuxai/blob/main/screenshots/01_70.jpg?raw=true)
+![alt text]([https://github.com/pasu11/tuxai/main/screenshots/01.jpg](https://github.com/pasu11/tuxai/blob/main/screenshots/01.jpg?raw=true)
 
 
 ## Privacy
