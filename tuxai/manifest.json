@@ -37,6 +37,7 @@
         "https://*/*"
       ],
       "js": [
+        "lib/i18n.js",
         "content/quickselect.js"
       ],
       "run_at": "document_idle",

@@ -9,6 +9,8 @@
     "build": "node scripts/build.mjs",
     "build:chrome": "node scripts/build.mjs --chrome",
     "build:firefox": "node scripts/build.mjs --firefox",
+    "dev:firefox": "bash scripts/run-firefox.sh",
+    "test:firefox": "node scripts/test-firefox.mjs",
     "package": "node scripts/build.mjs && node scripts/package.mjs",
     "package:only": "node scripts/package.mjs"
   }

@@ -64,6 +64,62 @@ cd dist/firefox
 web-ext build
 ```
 
+#### Live-reload while developing
+
+[`web-ext`](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/)
+loads the extension as a temporary add-on (no signing needed) and reloads it
+whenever the built files change. The repo ships a helper:
+
+```bash
+npm run dev:firefox              # opens Firefox, loads dist/firefox
+HEADLESS=1 npm run dev:firefox   # no window
+URL=https://example.com npm run dev:firefox
+```
+
+It prefers Playwright's Firefox when present, otherwise the `firefox` on your
+`PATH`. To use a specific binary:
+
+```bash
+FIREFOX=/path/to/firefox npm run dev:firefox
+```
+
+If `web-ext` is missing:
+
+```bash
+npm install -g --prefix "$HOME/.local" web-ext
+```
+
+> Note: Playwright's Firefox **cannot** sideload unsigned extensions (its
+> signature requirement is compiled in), so `web-ext run` is the reliable way
+> to load the real extension. For automated UI checks of the sidebar/popup in
+> Firefox you can serve the `*_harness.html` pages and drive them with
+> Playwright's Firefox (`playwright install firefox`).
+
+#### Firefox smoke test
+
+The repo includes a Playwright-Firefox smoke test for the sidebar and the page
+popup:
+
+```bash
+npm run test:firefox
+```
+
+It serves the source over HTTP with a stubbed browser API, checks that the
+sidebar boots (tabs, i18n, TTS providers/voices) and that the Alt+select popup
+appears with a speaker button, and fails on any page JS error. Use
+`FIREFOX_PORT=9000` to change the port, or `FIREFOX_HEADED=1` to watch it run
+(needs a display).
+
+#### Persistent Playwright Firefox profile
+
+`pwff` (the Firefox variant of `pw`) supports a persistent profile so storage
+and logins survive between runs:
+
+```bash
+pwff eval "https://example.com" '() => document.cookie' --profile /tmp/ffprof
+PW_PROFILE=/tmp/ffprof pwff shot "https://example.com" /tmp/x.png
+```
+
 ## Build from source
 
 ```bash

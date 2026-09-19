@@ -11,6 +11,45 @@ import { renderMarkdown } from "../lib/markdown.js";
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 
+// ---------- i18n ----------
+
+const i18n =
+  (typeof window !== "undefined" && window.TuxAIi18n) ||
+  (typeof globalThis !== "undefined" && globalThis.TuxAIi18n) ||
+  null;
+const LANGUAGE_KEY = (i18n && i18n.LANG_KEY) || "penguin_language";
+let uiLang = "en";
+
+function resolveLang(pref) {
+  if (i18n && typeof i18n.resolveLang === "function") {
+    return i18n.resolveLang(pref);
+  }
+  return pref === "zh" ? "zh" : "en";
+}
+
+function t(key, fallback) {
+  if (i18n && typeof i18n.t === "function") {
+    return i18n.t(uiLang, key, fallback);
+  }
+  return fallback !== undefined ? fallback : key;
+}
+
+function applyLanguage(pref) {
+  const value = pref === "zh" || pref === "en" ? pref : "auto";
+  try {
+    localStorage.setItem(LANGUAGE_KEY, value);
+  } catch (error) {
+    // No-op.
+  }
+  api.storage.local.set({ [LANGUAGE_KEY]: value }).catch(() => {});
+  uiLang = resolveLang(value);
+  document.documentElement.lang = uiLang === "zh" ? "zh" : "en";
+  if (i18n && typeof i18n.apply === "function") {
+    i18n.apply(uiLang, document);
+  }
+  if (dom.uiLanguage) dom.uiLanguage.value = value;
+}
+
 const SERVER_TYPES = new Set(["ollama", "koboldcpp", "llamacpp", "other"]);
 
 const SERVER_DEFAULTS = {
@@ -70,6 +109,42 @@ const QUICK_SHORTCUT_KEY = "penguin_quick_shortcut";
 const SELECTED_TEXT_KEY = "penguin_selected_text";
 const TEXT_SIZE_KEY = "penguin_text_size";
 const DEFAULT_TEXT_SIZE = 14;
+const TTS_MODEL_KEY = "penguin_tts_model";
+const TTS_VOICE_KEY = "penguin_tts_voice";
+const TTS_URL_KEY = "penguin_tts_url";
+const TTS_KEY_KEY = "penguin_tts_key";
+const TTS_PROVIDER_KEY = "penguin_tts_provider";
+const DEFAULT_TTS_VOICE = "alloy";
+// Short sample used by the settings "Test" button.
+const TTS_TEST_SENTENCE = "ok";
+// Voice lists taken from the OpenAI text-to-speech docs. `tts-1` and
+// `tts-1-hd` only support the legacy subset; newer models add more voices.
+const TTS_VOICES_FULL = [
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "fable",
+  "nova",
+  "onyx",
+  "sage",
+  "shimmer",
+  "verse",
+  "marin",
+  "cedar",
+];
+const TTS_VOICES_LEGACY = [
+  "alloy",
+  "ash",
+  "coral",
+  "echo",
+  "fable",
+  "onyx",
+  "nova",
+  "sage",
+  "shimmer",
+];
 const CHAT_SESSIONS_KEY = "penguin_chat_sessions";
 const INTERFACE_SCALE_KEY = "penguin_interface_scale";
 const RESTORED_MODEL_KEY = "penguin_restored_model";
@@ -80,7 +155,13 @@ const BACKUP_LOCAL_STORAGE_KEYS = [
   "penguin_theme",
   "penguin_context_size",
   "penguin_text_size",
+  "penguin_tts_model",
+  "penguin_tts_voice",
+  "penguin_tts_url",
+  "penguin_tts_key",
+  "penguin_tts_provider",
   "penguin_interface_scale",
+  "penguin_language",
   "penguin_settings_collapsed",
   "penguin_settings_tab",
 ];
@@ -127,9 +208,17 @@ const dom = {
   contextSize: document.getElementById("context-size"),
   textSize: document.getElementById("text-size"),
   resetTextSize: document.getElementById("reset-text-size"),
+  ttsModel: document.getElementById("tts-model"),
+  ttsApplyModel: document.getElementById("tts-apply-model"),
+  ttsProvider: document.getElementById("tts-provider"),
+  ttsUrl: document.getElementById("tts-url"),
+  ttsKey: document.getElementById("tts-key"),
+  ttsVoice: document.getElementById("tts-voice"),
+  ttsTestVoice: document.getElementById("tts-test-voice"),
   interfaceScale: document.getElementById("interface-scale"),
   resetInterfaceScale: document.getElementById("reset-interface-scale"),
   quickShortcut: document.getElementById("quick-shortcut"),
+  uiLanguage: document.getElementById("ui-language"),
   newTool: document.getElementById("new-tool"),
   resetTools: document.getElementById("reset-tools"),
   manageTool: document.getElementById("manage-tool"),
@@ -165,6 +254,7 @@ const state = {
   mode: localStorage.getItem("penguin_mode") || "server",
   serverType: localStorage.getItem("penguin_server_type") || "ollama",
   customCloudProviders: [],
+  cloudStore: {},
   toolState: { customTools: [], overrides: {}, deleted: [] },
   editingToolId: null,
   selectedText: "",
@@ -181,7 +271,7 @@ const state = {
 let uiReady = false;
 let cloudFetchTimer = null;
 let autoScrollToBottom = true;
-const SETTINGS_TAB_IDS = ["cloud", "local", "ui", "tools", "misc"];
+const SETTINGS_TAB_IDS = ["cloud", "local", "ui", "sound", "tools", "misc"];
 const SETTINGS_TAB_ALIASES = { chat: "ui", shortcut: "ui" };
 let activeSettingsTab = (() => {
   const stored = localStorage.getItem("penguin_settings_tab");
@@ -198,6 +288,8 @@ async function init() {
   applyTextSize(
     Number.isFinite(savedTextSize) ? savedTextSize : DEFAULT_TEXT_SIZE
   );
+  initTtsSettings();
+  await hydrateTtsSettingsFromStorage();
   const savedInterfaceScale = parseFloat(
     localStorage.getItem(INTERFACE_SCALE_KEY)
   );
@@ -206,6 +298,7 @@ async function init() {
   );
   restoreSettingsPanelVisibility();
   bindEvents();
+  applyLanguage(localStorage.getItem(LANGUAGE_KEY) || "auto");
   state.toolState = await getToolState();
   renderTools();
 
@@ -250,6 +343,7 @@ function bindEvents() {
     localStorage.setItem("penguin_server_type", dom.serverType.value);
     await applyServerDefaults();
     await refreshUnifiedModelSelect();
+    applyTtsModel();
     if (state.mode === "server" && dom.serverUrl.value.trim()) {
       fetchServerModels({ silent: true });
     }
@@ -285,11 +379,12 @@ function bindEvents() {
     }
   });
 
-  dom.cloudProvider.addEventListener("change", () => {
+  dom.cloudProvider.addEventListener("change", async () => {
     api.storage.local.set({ cloud_provider: dom.cloudProvider.value });
     if (cloudFetchTimer) clearTimeout(cloudFetchTimer);
-    loadCloudSettingsForProvider();
-    refreshUnifiedModelSelect();
+    await loadCloudSettingsForProvider();
+    await refreshUnifiedModelSelect();
+    applyTtsModel();
   });
 
   dom.addCloudProviderBtn.addEventListener("click", () => {
@@ -397,6 +492,48 @@ function bindEvents() {
     localStorage.setItem(TEXT_SIZE_KEY, String(DEFAULT_TEXT_SIZE));
   });
 
+  dom.ttsModel.addEventListener("input", () => {
+    saveTtsSetting(TTS_MODEL_KEY, dom.ttsModel.value.trim());
+  });
+
+  dom.ttsProvider.addEventListener("change", () => {
+    saveTtsSetting(TTS_PROVIDER_KEY, dom.ttsProvider.value);
+    applyTtsModel();
+  });
+
+  dom.ttsUrl.addEventListener("input", () => {
+    saveTtsSetting(TTS_URL_KEY, dom.ttsUrl.value.trim());
+  });
+
+  dom.ttsUrl.addEventListener("change", () => applyTtsModel());
+
+  dom.ttsKey.addEventListener("input", () => {
+    saveTtsSetting(TTS_KEY_KEY, dom.ttsKey.value.trim());
+  });
+
+  dom.ttsKey.addEventListener("change", () => applyTtsModel());
+
+  // Pressing Enter (or clicking "Use") loads the voices for this model.
+  dom.ttsModel.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    applyTtsModel();
+  });
+
+  dom.ttsApplyModel.addEventListener("click", () => applyTtsModel());
+
+  dom.ttsVoice.addEventListener("change", () => {
+    saveTtsSetting(TTS_VOICE_KEY, dom.ttsVoice.value.trim());
+  });
+
+  dom.ttsTestVoice.addEventListener("click", () => {
+    if (activeSpeech && activeSpeech.button === dom.ttsTestVoice) {
+      stopActiveSpeech();
+      return;
+    }
+    testTtsVoice();
+  });
+
   dom.interfaceScale.addEventListener("change", () => {
     applyInterfaceScale(dom.interfaceScale.value);
   });
@@ -407,6 +544,13 @@ function bindEvents() {
 
   dom.quickShortcut.addEventListener("change", () => {
     api.storage.local.set({ [QUICK_SHORTCUT_KEY]: dom.quickShortcut.value });
+  });
+
+  dom.uiLanguage.addEventListener("change", () => {
+    applyLanguage(dom.uiLanguage.value);
+    if (typeof renderTools === "function") renderTools();
+    renderTtsProviderOptions();
+    applyTtsModel({ persist: false });
   });
 
   dom.manageTool.addEventListener("change", () => {
@@ -525,6 +669,228 @@ function applyTextSize(size) {
   dom.textSize.value = String(px);
 }
 
+// Returns the supported voice list for a known TTS model, or null when the
+// model is not recognized as a text-to-speech model.
+function knownTtsVoices(model) {
+  const name = String(model || "").trim().toLowerCase();
+  if (!name) return null;
+  // Only the classic tts-1 / tts-1-hd models use the smaller voice set.
+  if (/(^|\/)tts-1(-hd)?$/.test(name)) return TTS_VOICES_LEGACY;
+  if (/tts/.test(name)) return TTS_VOICES_FULL;
+  return null;
+}
+
+// The model that will actually be used for speech: the explicit TTS model if
+// set, otherwise a sensible default for the current provider. When a dedicated
+// TTS endpoint is configured, default to the best OpenAI TTS model.
+function effectiveTtsModel() {
+  const explicit = ttsModelValue();
+  if (explicit) return explicit;
+
+  if (dom.ttsUrl && dom.ttsUrl.value.trim()) {
+    return "gpt-4o-mini-tts";
+  }
+
+  if (dom.ttsProvider && dom.ttsProvider.value) {
+    return defaultTtsModel(dom.ttsProvider.value);
+  }
+
+  if (state.mode === "cloud") {
+    const provider = dom.cloudProvider.value;
+    const endpoint = cloudProviderDefaults(provider);
+    const chatModel = getCloudModelValue() || endpoint.model || "";
+    if (chatModel && /tts|audio/i.test(chatModel)) return chatModel;
+    return defaultTtsModel(provider);
+  }
+
+  return "tts-1";
+}
+
+function setTtsVoice(value) {
+  const voice = String(value || "");
+  if (dom.ttsVoice) dom.ttsVoice.value = voice;
+  saveTtsSetting(TTS_VOICE_KEY, voice);
+}
+
+function showTtsVoiceUnsupported(reason) {
+  if (!dom.ttsVoice) return;
+  dom.ttsVoice.innerHTML = "";
+  const option = document.createElement("option");
+  option.value = "";
+  option.textContent = t("sound.notSupported", "TTS not supported");
+  dom.ttsVoice.appendChild(option);
+  dom.ttsVoice.disabled = true;
+  dom.ttsVoice.title = reason || "Text-to-speech is not supported.";
+}
+
+function populateTtsVoices(voices) {
+  if (!dom.ttsVoice) return;
+  dom.ttsVoice.innerHTML = "";
+  for (const voice of voices) {
+    const option = document.createElement("option");
+    option.value = voice;
+    option.textContent = voice;
+    dom.ttsVoice.appendChild(option);
+  }
+  dom.ttsVoice.disabled = false;
+  dom.ttsVoice.title = "";
+
+  const saved = localStorage.getItem(TTS_VOICE_KEY) || "";
+  const chosen = voices.includes(saved) ? saved : DEFAULT_TTS_VOICE;
+  setTtsVoice(chosen);
+}
+
+// Builds the "TTS provider" dropdown so speech can use a different provider
+// than the chat model (e.g. chat with DeepSeek, speak with OpenAI).
+function renderTtsProviderOptions(selected) {
+  if (!dom.ttsProvider) return "";
+  const current =
+    selected !== undefined
+      ? selected
+      : dom.ttsProvider.value || localStorage.getItem(TTS_PROVIDER_KEY) || "";
+
+  dom.ttsProvider.innerHTML = "";
+  const sameOption = document.createElement("option");
+  sameOption.value = "";
+  sameOption.textContent = t("sound.sameAsChat", "Same as chat provider");
+  dom.ttsProvider.appendChild(sameOption);
+
+  const providers = [
+    ...BUILT_IN_CLOUD_PROVIDERS.map((id) => ({
+      id,
+      label: cloudProviderLabel(id),
+    })),
+    ...(state.customCloudProviders || []).map((item) => ({
+      id: item.id,
+      label: item.name,
+    })),
+  ];
+  for (const provider of providers) {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = provider.label;
+    dom.ttsProvider.appendChild(option);
+  }
+
+  const valid = ["", ...providers.map((provider) => provider.id)];
+  dom.ttsProvider.value = valid.includes(current) ? current : "";
+  return dom.ttsProvider.value;
+}
+
+// Runs when the user clicks "Use" (or presses Enter) next to the TTS model
+// field: loads the supported voices, or reports that the model has no TTS.
+function applyTtsModel(options = {}) {
+  const raw = dom.ttsModel ? dom.ttsModel.value : "";
+  const explicit = normalizeTtsModelName(raw);
+  if (dom.ttsModel && dom.ttsModel.value !== explicit) {
+    dom.ttsModel.value = explicit;
+  }
+  // Always persist a corrected (auto-fixed) value, even on silent reloads.
+  if (options.persist !== false || raw !== explicit) {
+    saveTtsSetting(TTS_MODEL_KEY, explicit);
+  }
+
+  const provider = getTtsConfig();
+  if (!provider.supported) {
+    showTtsVoiceUnsupported(provider.reason);
+    refreshSpeakButtons();
+    return;
+  }
+
+  const model = provider.model || effectiveTtsModel();
+  const voices = knownTtsVoices(model);
+  if (!voices) {
+    showTtsVoiceUnsupported(
+      `"${model}" is not recognized as a text-to-speech model.`
+    );
+  } else {
+    populateTtsVoices(voices);
+  }
+  refreshSpeakButtons();
+}
+
+function initTtsSettings() {
+  if (dom.ttsModel) {
+    dom.ttsModel.value = localStorage.getItem(TTS_MODEL_KEY) || "";
+  }
+  if (dom.ttsUrl) {
+    dom.ttsUrl.value = localStorage.getItem(TTS_URL_KEY) || "";
+  }
+  if (dom.ttsKey) {
+    dom.ttsKey.value = localStorage.getItem(TTS_KEY_KEY) || "";
+  }
+  // Voice options are filled in by applyTtsModel() once the provider settings
+  // have loaded.
+}
+
+// TTS settings live in localStorage for synchronous UI reads, but the
+// background worker needs them too, so mirror each change into storage.local.
+function saveTtsSetting(key, value) {
+  const text = String(value ?? "");
+  try {
+    localStorage.setItem(key, text);
+  } catch (error) {
+    // No-op.
+  }
+  api.storage.local.set({ [key]: text }).catch(() => {});
+}
+
+// Pulls TTS settings back from storage.local (e.g. after an extension update
+// or a backup restore) and mirrors them into localStorage.
+async function hydrateTtsSettingsFromStorage() {
+  const keys = [
+    TTS_MODEL_KEY,
+    TTS_VOICE_KEY,
+    TTS_URL_KEY,
+    TTS_KEY_KEY,
+    TTS_PROVIDER_KEY,
+  ];
+  let stored = {};
+  try {
+    stored = await api.storage.local.get(keys);
+  } catch (error) {
+    return;
+  }
+
+  const model = stored[TTS_MODEL_KEY];
+  if (model !== undefined && model !== null) {
+    dom.ttsModel.value = model;
+    localStorage.setItem(TTS_MODEL_KEY, model);
+  }
+  const url = stored[TTS_URL_KEY];
+  if (url !== undefined && url !== null) {
+    dom.ttsUrl.value = url;
+    localStorage.setItem(TTS_URL_KEY, url);
+  }
+  const key = stored[TTS_KEY_KEY];
+  if (key !== undefined && key !== null) {
+    dom.ttsKey.value = key;
+    localStorage.setItem(TTS_KEY_KEY, key);
+  }
+  const provider = stored[TTS_PROVIDER_KEY];
+  if (provider !== undefined && provider !== null) {
+    localStorage.setItem(TTS_PROVIDER_KEY, provider);
+  }
+  const voice = stored[TTS_VOICE_KEY];
+  if (voice !== undefined && voice !== null) {
+    localStorage.setItem(TTS_VOICE_KEY, voice);
+  }
+
+  // Keep storage.local in sync so the background worker can read them even
+  // for settings that only existed in localStorage before this update.
+  saveTtsSetting(TTS_MODEL_KEY, dom.ttsModel.value || "");
+  saveTtsSetting(TTS_URL_KEY, dom.ttsUrl.value || "");
+  saveTtsSetting(TTS_KEY_KEY, dom.ttsKey.value || "");
+  saveTtsSetting(
+    TTS_VOICE_KEY,
+    localStorage.getItem(TTS_VOICE_KEY) || DEFAULT_TTS_VOICE
+  );
+  saveTtsSetting(
+    TTS_PROVIDER_KEY,
+    localStorage.getItem(TTS_PROVIDER_KEY) || ""
+  );
+}
+
 function applyInterfaceScale(value) {
   let scale = parseFloat(value);
   if (!Number.isFinite(scale)) scale = 1;
@@ -605,6 +971,14 @@ function isBackupStorageKey(key) {
     "penguin_tool_overrides",
     "penguin_tool_deleted",
     "penguin_chat_sessions",
+    // TTS settings are mirrored into storage.local so the background worker
+    // can read them; they must be part of the backup too.
+    "penguin_tts_model",
+    "penguin_tts_voice",
+    "penguin_tts_url",
+    "penguin_tts_key",
+    "penguin_tts_provider",
+    "penguin_language",
   ];
   if (exactKeys.includes(key)) return true;
   if (/^server_(url|model|model_list|model_disabled|custom_models)_/.test(key)) return true;
@@ -729,6 +1103,7 @@ async function setMode(mode, options = {}) {
   } else {
     await loadCloudSettingsForProvider();
   }
+  applyTtsModel({ persist: false });
 }
 
 async function applyServerDefaults() {
@@ -1673,7 +2048,7 @@ function appendMessage(role, content, options = {}) {
   if (role !== "system") {
     const label = document.createElement("div");
     label.className = "message-label";
-    label.textContent = role === "user" ? "You" : "Assistant";
+    label.textContent = role === "user" ? t("role.you") : t("role.assistant");
     messageEl.appendChild(label);
   }
 
@@ -1683,7 +2058,7 @@ function appendMessage(role, content, options = {}) {
   if (role === "ai") {
     const contentEl = document.createElement("div");
     contentEl.className = "message-content";
-    contentEl.innerHTML = renderMarkdown(content || "Thinking...");
+    contentEl.innerHTML = renderMarkdown(content || t("msg.thinking"));
     bubble.appendChild(contentEl);
     messageEl._contentEl = contentEl;
   } else {
@@ -1709,6 +2084,7 @@ function appendMessage(role, content, options = {}) {
     const actions = document.createElement("div");
     actions.className = "message-actions";
     actions.appendChild(createCopyMessageButton(messageEl));
+    actions.appendChild(createSpeakMessageButton(messageEl));
     messageEl.appendChild(actions);
   }
 
@@ -1838,7 +2214,7 @@ function createCopyMessageButton(messageEl) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "copy-message-btn";
-  button.title = "Copy message";
+  button.title = t("msg.copy", "Copy message");
   button.setAttribute("aria-label", "Copy message text");
 
   const copyIcon =
@@ -1853,12 +2229,378 @@ function createCopyMessageButton(messageEl) {
     const ok = await copyTextToClipboard(text);
     button.classList.add("copied");
     button.innerHTML = ok ? checkIcon : copyIcon;
-    button.title = ok ? "Copied!" : "Copy failed";
+    button.title = ok ? t("msg.copied", "Copied!") : t("msg.copyFailed", "Copy failed");
     setTimeout(() => {
       button.classList.remove("copied");
       button.innerHTML = copyIcon;
-      button.title = "Copy message";
+      button.title = t("msg.copy", "Copy message");
     }, 1200);
+  });
+
+  return button;
+}
+
+// ---------- Text to speech ----------
+
+let activeSpeech = null;
+
+// Guards against the very common "gpt-40" (zero) / "gpt-4o" (letter o) typo.
+function normalizeTtsModelName(model) {
+  return String(model || "")
+    .trim()
+    .replace(/^gpt-40(?=[-_]|$)/i, "gpt-4o");
+}
+
+function ttsModelValue() {
+  return normalizeTtsModelName(dom.ttsModel ? dom.ttsModel.value : "");
+}
+
+function ttsVoiceValue() {
+  const voice = dom.ttsVoice ? dom.ttsVoice.value.trim() : "";
+  return voice || DEFAULT_TTS_VOICE;
+}
+
+function defaultTtsModel(provider) {
+  return provider === "openai" ? "gpt-4o-mini-tts" : "tts-1";
+}
+
+// Decide whether the currently selected provider/model can speak. Only
+// OpenAI-compatible endpoints expose the /v1/audio/speech route.
+function getTtsConfig() {
+  let baseUrl = "";
+  let headers = { "Content-Type": "application/json" };
+
+  // A dedicated TTS endpoint/provider is independent of the chat model, so a
+  // user can chat with DeepSeek and speak with OpenAI at the same time.
+  const dedicatedUrl = dom.ttsUrl ? dom.ttsUrl.value.trim() : "";
+  const dedicatedKey = dom.ttsKey ? dom.ttsKey.value.trim() : "";
+  const ttsProvider = dom.ttsProvider ? dom.ttsProvider.value : "";
+
+  if (dedicatedUrl) {
+    baseUrl = dedicatedUrl.replace(/\/+$/, "");
+    if (dedicatedKey) {
+      headers.Authorization = `Bearer ${dedicatedKey}`;
+    }
+  } else if (ttsProvider) {
+    // Reuse the stored cloud credentials of the chosen TTS provider.
+    const kind = cloudProviderKind(ttsProvider);
+    if (kind !== "openai") {
+      return {
+        supported: false,
+        reason: `${cloudProviderLabel(
+          ttsProvider
+        )} does not expose an OpenAI-compatible speech endpoint.`,
+      };
+    }
+    const endpoint = cloudProviderDefaults(ttsProvider);
+    const store = state.cloudStore || {};
+    baseUrl = String(
+      store[`cloud_api_url_${ttsProvider}`] || endpoint.url || ""
+    ).replace(/\/+$/, "");
+    const apiKey =
+      dedicatedKey || String(store[`cloud_api_key_${ttsProvider}`] || "").trim();
+    if (!baseUrl) {
+      return {
+        supported: false,
+        reason: `Set the API URL for ${cloudProviderLabel(ttsProvider)}.`,
+      };
+    }
+    if (!apiKey) {
+      return {
+        supported: false,
+        reason: `Add an API key for ${cloudProviderLabel(
+          ttsProvider
+        )} in the Cloud Server tab, or paste it in the TTS API key field.`,
+      };
+    }
+    headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+  } else if (state.mode === "cloud") {
+    const provider = dom.cloudProvider.value;
+    const kind = cloudProviderKind(provider);
+    if (kind !== "openai") {
+      return {
+        supported: false,
+        reason: `${cloudProviderLabel(
+          provider
+        )} does not expose an OpenAI-compatible speech endpoint. Pick a TTS provider above or switch to an OpenAI-compatible chat provider.`,
+      };
+    }
+
+    const endpoint = cloudProviderDefaults(provider);
+    baseUrl = (dom.cloudApiUrl.value.trim() || endpoint.url || "").replace(
+      /\/+$/,
+      ""
+    );
+    const apiKey = dedicatedKey || dom.cloudApiKey.value.trim();
+    if (!baseUrl || !apiKey) {
+      return {
+        supported: false,
+        reason: "Set the cloud API URL and API key to use text-to-speech.",
+      };
+    }
+    headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+  } else {
+    const type = dom.serverType.value;
+    if (type === "ollama") {
+      return {
+        supported: false,
+        reason: "Ollama does not expose a text-to-speech endpoint.",
+      };
+    }
+    baseUrl = dom.serverUrl.value.trim().replace(/\/+$/, "");
+    if (!baseUrl) {
+      return {
+        supported: false,
+        reason: "Set the local server URL to use text-to-speech.",
+      };
+    }
+  }
+
+  // Only recognized TTS models can speak through /v1/audio/speech.
+  const model = effectiveTtsModel();
+  if (!knownTtsVoices(model)) {
+    return {
+      supported: false,
+      reason: `"${model}" is not recognized as a text-to-speech model.`,
+    };
+  }
+
+  return {
+    supported: true,
+    url: `${baseUrl}/v1/audio/speech`,
+    headers,
+    model,
+    voice: ttsVoiceValue(),
+  };
+}
+
+function stopActiveSpeech() {
+  if (!activeSpeech) return;
+  const { controller, audio, url, restore } = activeSpeech;
+  activeSpeech = null;
+
+  if (controller) {
+    try {
+      controller.abort();
+    } catch (error) {
+      // No-op.
+    }
+  }
+  if (audio) {
+    try {
+      audio.pause();
+    } catch (error) {
+      // No-op.
+    }
+  }
+  if (url) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      // No-op.
+    }
+  }
+  if (restore) restore();
+}
+
+function updateSpeakButtonVisibility(button) {
+  const config = getTtsConfig();
+  button.hidden = !config.supported;
+  button.title = config.supported
+    ? t("msg.readAloud", "Read aloud")
+    : config.reason || "Text-to-speech is not available.";
+  if (!config.supported) button.disabled = true;
+  else button.disabled = false;
+}
+
+function refreshSpeakButtons() {
+  document
+    .querySelectorAll(".speak-message-btn")
+    .forEach(updateSpeakButtonVisibility);
+}
+
+// UI states shared by the message speaker button and the settings "Test"
+// button. `restore` is called when playback stops or is aborted.
+function messageSpeechUi(button, icons) {
+  return {
+    loading() {
+      button.classList.add("loading");
+      button.classList.remove("speaking");
+      button.innerHTML = icons.speak;
+      button.title = t("popup.generating", "Generating speech...");
+      button.disabled = false;
+    },
+    speaking() {
+      button.classList.remove("loading");
+      button.classList.add("speaking");
+      button.innerHTML = icons.stop;
+      button.title = t("msg.stopReading", "Stop reading");
+    },
+    error() {
+      button.classList.remove("loading", "speaking");
+      button.innerHTML = icons.error;
+      button.title = t("msg.ttsFailed", "Text-to-speech failed");
+      button.disabled = false;
+    },
+    restore() {
+      button.classList.remove("loading", "speaking");
+      button.innerHTML = icons.speak;
+      button.title = t("msg.readAloud", "Read aloud");
+      button.disabled = false;
+    },
+  };
+}
+
+function textButtonSpeechUi(button, idleLabel) {
+  return {
+    loading() {
+      button.classList.remove("speaking");
+      button.disabled = true;
+      button.textContent = "Loading...";
+    },
+    speaking() {
+      button.classList.add("speaking");
+      button.disabled = false;
+      button.textContent = "Stop";
+    },
+    error() {
+      button.classList.remove("speaking");
+      button.disabled = false;
+      button.textContent = "Failed";
+    },
+    restore() {
+      button.classList.remove("speaking");
+      button.disabled = false;
+      button.textContent = idleLabel || "Test";
+    },
+  };
+}
+
+async function startSpeech(text, button, ui) {
+  const value = String(text || "").trim();
+  if (!value) return;
+
+  const config = getTtsConfig();
+  if (!config.supported) {
+    appendSystemMessage(config.reason || "Text-to-speech is not available.");
+    return;
+  }
+
+  stopActiveSpeech();
+
+  const controller = new AbortController();
+  activeSpeech = { button, controller, audio: null, url: null, restore: ui.restore };
+  ui.loading();
+
+  try {
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: config.headers,
+      body: JSON.stringify({
+        model: config.model,
+        input: value,
+        voice: config.voice,
+        response_format: "mp3",
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(
+        `HTTP ${response.status}${detail ? ` - ${detail.slice(0, 240)}` : ""}`
+      );
+    }
+
+    const blob = await response.blob();
+    if (!activeSpeech || activeSpeech.button !== button) return;
+
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    activeSpeech.audio = audio;
+    activeSpeech.url = url;
+    ui.speaking();
+
+    audio.addEventListener("ended", () => {
+      if (activeSpeech && activeSpeech.audio === audio) stopActiveSpeech();
+    });
+    audio.addEventListener("error", () => {
+      if (activeSpeech && activeSpeech.audio === audio) {
+        stopActiveSpeech();
+        appendSystemMessage("Audio playback failed.");
+      }
+    });
+
+    await audio.play();
+  } catch (error) {
+    if (error && error.name === "AbortError") return;
+
+    const wasActive = activeSpeech && activeSpeech.button === button;
+    if (wasActive) activeSpeech = null;
+
+    ui.error();
+
+    const message = error && error.message ? error.message : String(error);
+    appendSystemMessage(`Text-to-speech failed: ${message}`);
+
+    setTimeout(() => {
+      if (activeSpeech && activeSpeech.button === button) return;
+      ui.restore();
+    }, 1800);
+  }
+}
+
+function speakMessage(messageEl, button, icons) {
+  const text = copyableMessageText(messageEl);
+  if (!text) return;
+  startSpeech(text, button, messageSpeechUi(button, icons));
+}
+
+function testTtsVoice() {
+  const config = getTtsConfig();
+  if (!config.supported) {
+    appendSystemMessage(config.reason || "Text-to-speech is not available.");
+    return;
+  }
+  if (!dom.ttsVoice || !dom.ttsVoice.value) {
+    appendSystemMessage("Load a TTS model and pick a voice first.");
+    return;
+  }
+  const ui = textButtonSpeechUi(dom.ttsTestVoice, "Test");
+  startSpeech(TTS_TEST_SENTENCE, dom.ttsTestVoice, ui);
+}
+
+function createSpeakMessageButton(messageEl) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "speak-message-btn";
+  button.title = t("msg.readAloud", "Read aloud");
+  button.setAttribute("aria-label", "Read message aloud");
+
+  const icons = {
+    speak:
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>',
+    stop:
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>',
+    error:
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
+  };
+
+  button.innerHTML = icons.speak;
+  updateSpeakButtonVisibility(button);
+
+  button.addEventListener("click", () => {
+    if (activeSpeech && activeSpeech.button === button) {
+      stopActiveSpeech();
+      return;
+    }
+    speakMessage(messageEl, button, icons);
   });
 
   return button;
@@ -2460,6 +3202,8 @@ async function refreshUnifiedModelSelect() {
   }
 
   state.customCloudProviders = await getCustomCloudProviders();
+  renderTtsProviderOptions();
+  applyTtsModel({ persist: false });
   const cloudProviders = [
     ...BUILT_IN_CLOUD_PROVIDERS,
     ...(state.customCloudProviders || []).map((item) => item.id),
@@ -2476,6 +3220,7 @@ async function refreshUnifiedModelSelect() {
     );
   }
   const cloudStore = await api.storage.local.get(cloudKeys);
+  state.cloudStore = cloudStore;
 
   for (const provider of cloudProviders) {
     const defaults = cloudProviderDefaults(provider);
@@ -2529,12 +3274,12 @@ async function refreshUnifiedModelSelect() {
   if (!options.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "No model selected";
+    option.textContent = t("composer.noModel", "No model selected");
     dom.quickModelSelect.appendChild(option);
 
     const empty = document.createElement("div");
     empty.className = "quick-model-empty";
-    empty.textContent = "No model selected";
+    empty.textContent = t("composer.noModel", "No model selected");
     dom.quickModelMenu.appendChild(empty);
     updateQuickModelTrigger();
     return;
@@ -2560,7 +3305,7 @@ async function refreshUnifiedModelSelect() {
   } else {
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = "No model selected";
+    placeholder.textContent = t("composer.noModel", "No model selected");
     dom.quickModelSelect.appendChild(placeholder);
     dom.quickModelSelect.value = "";
   }
@@ -2627,7 +3372,7 @@ function updateQuickModelTrigger() {
   if (kind) dom.quickModelLabel.appendChild(createModelIconElement(kind));
 
   const text = document.createElement("span");
-  text.textContent = label || "No model selected";
+  text.textContent = label || t("composer.noModel", "No model selected");
   dom.quickModelLabel.appendChild(text);
   dom.quickModelTrigger.title = label || "Switch model";
 }

@@ -305,6 +305,36 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "penguin_popup_speak") {
+    const text = String(message.text || "").trim();
+    if (!text) {
+      try {
+        sendResponse({ ok: false, error: "No text to speak." });
+      } catch (error) {
+        // No-op.
+      }
+      return;
+    }
+
+    speakViaTts(text)
+      .then((result) => {
+        try {
+          sendResponse(result);
+        } catch (error) {
+          // No-op.
+        }
+      })
+      .catch((error) => {
+        const msg = error && error.message ? error.message : String(error);
+        try {
+          sendResponse({ ok: false, error: msg });
+        } catch (sendError) {
+          // No-op.
+        }
+      });
+    return true;
+  }
+
   if (message.type === "penguin_notify") {
     // Sidebar uses this only to show a system message when it is open.
     try {
@@ -589,6 +619,193 @@ async function runPopupToolRequest(toolId, text) {
     const message = error && error.message ? error.message : String(error);
     return { ok: false, error: message };
   }
+}
+
+// ---------- Text to speech (quick popup) ----------
+
+const DEFAULT_TTS_VOICE = "alloy";
+
+function isKnownTtsModel(model) {
+  const name = String(model || "").trim().toLowerCase();
+  if (!name) return false;
+  return /(^|\/)tts-1(-hd)?$/.test(name) || /tts/.test(name);
+}
+
+function defaultTtsModel(provider) {
+  return provider === "openai" ? "gpt-4o-mini-tts" : "tts-1";
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+// Builds the same /v1/audio/speech request the sidebar uses. Mirrors the
+// sidebar's provider precedence so the page popup can speak tool results.
+async function speakViaTts(text) {
+  const keys = [
+    "penguin_mode",
+    "penguin_server_type",
+    "cloud_provider",
+    "penguin_tts_model",
+    "penguin_tts_voice",
+    "penguin_tts_url",
+    "penguin_tts_key",
+    "penguin_tts_provider",
+  ];
+  const stored = await api.storage.local.get(keys);
+  const mode = stored.penguin_mode || "server";
+  const manualUrl = String(stored.penguin_tts_url || "").trim();
+  const manualKey = String(stored.penguin_tts_key || "").trim();
+  const ttsProvider = String(stored.penguin_tts_provider || "").trim();
+
+  let baseUrl = "";
+  let apiKey = "";
+  let authRequired = true;
+
+  if (manualUrl) {
+    baseUrl = manualUrl.replace(/\/+$/, "");
+    apiKey = manualKey;
+    authRequired = false;
+  } else if (ttsProvider) {
+    const kind = await getCloudProviderKind(ttsProvider);
+    if (kind !== "openai") {
+      return {
+        ok: false,
+        error: `${await getCloudProviderLabel(
+          ttsProvider
+        )} does not expose an OpenAI-compatible speech endpoint.`,
+      };
+    }
+    const endpoint = await getCloudProviderDefaults(ttsProvider);
+    const providerKeys = [
+      `cloud_api_url_${ttsProvider}`,
+      `cloud_api_key_${ttsProvider}`,
+    ];
+    const providerStore = await api.storage.local.get(providerKeys);
+    baseUrl = String(
+      providerStore[providerKeys[0]] || endpoint.url || ""
+    ).replace(/\/+$/, "");
+    apiKey = manualKey || String(providerStore[providerKeys[1]] || "").trim();
+    if (!baseUrl) {
+      return {
+        ok: false,
+        error: `Set the API URL for ${await getCloudProviderLabel(
+          ttsProvider
+        )}.`,
+      };
+    }
+    if (!apiKey) {
+      return {
+        ok: false,
+        error: `Add an API key for ${await getCloudProviderLabel(
+          ttsProvider
+        )} in the sidebar settings.`,
+      };
+    }
+  } else if (mode === "cloud") {
+    const provider = stored.cloud_provider || "deepseek";
+    const kind = await getCloudProviderKind(provider);
+    if (kind !== "openai") {
+      return {
+        ok: false,
+        error: `${await getCloudProviderLabel(
+          provider
+        )} does not expose an OpenAI-compatible speech endpoint.`,
+      };
+    }
+    const endpoint = await getCloudProviderDefaults(provider);
+    const providerKeys = [`cloud_api_url_${provider}`, `cloud_api_key_${provider}`];
+    const providerStore = await api.storage.local.get(providerKeys);
+    baseUrl = String(
+      providerStore[providerKeys[0]] || endpoint.url || ""
+    ).replace(/\/+$/, "");
+    apiKey = manualKey || String(providerStore[providerKeys[1]] || "").trim();
+    if (!baseUrl || !apiKey) {
+      return {
+        ok: false,
+        error: "Set the cloud API URL and API key to use text-to-speech.",
+      };
+    }
+  } else {
+    const type = stored.penguin_server_type || "ollama";
+    if (type === "ollama") {
+      return {
+        ok: false,
+        error: "Ollama does not expose a text-to-speech endpoint.",
+      };
+    }
+    const defaults = SERVER_DEFAULTS[type] || SERVER_DEFAULTS.koboldcpp;
+    const serverKeys = [`server_url_${type}`];
+    const serverStore = await api.storage.local.get(serverKeys);
+    baseUrl = String(serverStore[serverKeys[0]] || defaults.url || "").replace(
+      /\/+$/,
+      ""
+    );
+    authRequired = false;
+    if (!baseUrl) {
+      return {
+        ok: false,
+        error: "Set the local server URL to use text-to-speech.",
+      };
+    }
+  }
+
+  let model = String(stored.penguin_tts_model || "").trim();
+  if (!model) {
+    if (manualUrl) model = "gpt-4o-mini-tts";
+    else if (ttsProvider) model = defaultTtsModel(ttsProvider);
+    else if (mode === "cloud")
+      model = defaultTtsModel(stored.cloud_provider || "deepseek");
+    else model = "tts-1";
+  }
+  // Guards against the very common "gpt-40" (zero) / "gpt-4o" (letter o) typo.
+  model = model.replace(/^gpt-40(?=[-_]|$)/i, "gpt-4o");
+  if (!isKnownTtsModel(model)) {
+    return {
+      ok: false,
+      error: `"${model}" is not recognized as a text-to-speech model.`,
+    };
+  }
+
+  const voice =
+    String(stored.penguin_tts_voice || "").trim() || DEFAULT_TTS_VOICE;
+  const headers = { "Content-Type": "application/json" };
+  if (authRequired && apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice,
+      response_format: "mp3",
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    return {
+      ok: false,
+      error: `HTTP ${response.status}${
+        detail ? ` - ${detail.slice(0, 240)}` : ""
+      }`,
+    };
+  }
+
+  const buffer = await response.arrayBuffer();
+  const contentType = response.headers.get("content-type") || "audio/mpeg";
+  return {
+    ok: true,
+    audio: `data:${contentType};base64,${arrayBufferToBase64(buffer)}`,
+  };
 }
 
 async function openPanelIfClosed(tabId) {

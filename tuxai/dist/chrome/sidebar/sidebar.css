@@ -114,6 +114,10 @@ body {
   filter: drop-shadow(0 4px 10px rgba(13, 148, 136, 0.35));
 }
 
+.brand-mark img {
+  display: block;
+}
+
 .brand-text {
   min-width: 0;
 }
@@ -224,8 +228,8 @@ body.settings-open .history-panel {
 
 .settings-tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -239,11 +243,11 @@ body.settings-open .history-panel {
 .settings-tab {
   border: none;
   border-radius: 9px;
-  padding: 8px 2px;
+  padding: 7px 1px;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 1.2;
   cursor: pointer;
@@ -305,6 +309,13 @@ body.settings-open .history-panel {
 
 .settings-card:nth-child(even) {
   background: var(--surface);
+}
+
+.settings-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+  flex-shrink: 0;
 }
 
 .settings-card.settings-card-plain,
@@ -696,6 +707,7 @@ body.settings-open .history-panel {
 
 .message-actions {
   display: flex;
+  gap: 6px;
   margin: 4px 4px 0;
   min-height: 24px;
 }
@@ -733,6 +745,54 @@ body.settings-open .history-panel {
   color: var(--accent-strong);
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.speak-message-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.speak-message-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.speak-message-btn.speaking {
+  color: var(--accent-strong);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  animation: speak-pulse 1.2s ease-in-out infinite;
+}
+
+.speak-message-btn.loading {
+  color: var(--accent);
+  border-color: var(--accent);
+  animation: speak-pulse 1s ease-in-out infinite;
+}
+
+.speak-message-btn[hidden] {
+  display: none;
+}
+
+@keyframes speak-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .message-content {
