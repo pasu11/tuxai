@@ -1418,6 +1418,36 @@ body.settings-open .history-panel {
 }
 
 /* Reasoning / thinking block inside AI messages */
+.message.ai .bubble.has-reasoning {
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+
+/* Answer bubble shown next to the reasoning box in thinking mode */
+.answer-bubble {
+  background: #fffed9;
+  border: 1px solid #e8e3a3;
+  border-radius: 8px;
+  padding: 8px 11px;
+  color: #1f2937;
+}
+
+.answer-bubble[hidden] {
+  display: none;
+}
+
+.answer-bubble .message-content code {
+  background: rgba(0, 0, 0, 0.07);
+  color: #1f2937;
+}
+
+.answer-bubble .message-content pre code {
+  background: transparent;
+  color: inherit;
+}
+
 .reasoning-box {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);

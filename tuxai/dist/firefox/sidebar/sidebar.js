@@ -2096,8 +2096,31 @@ function appendMessage(role, content, options = {}) {
 function updateAssistantContent(messageEl, rawText) {
   if (messageEl._contentEl) {
     messageEl._contentEl.innerHTML = renderMarkdown(rawText || "");
+    if (messageEl._answerBubble) {
+      messageEl._answerBubble.hidden = !String(rawText || "").trim();
+    }
     scrollChatToBottom();
   }
+}
+
+// In thinking mode the reasoning is shown in its own box; put the final
+// answer into a separate bubble so it stands out from the reasoning.
+function createAnswerBubble(messageEl) {
+  if (messageEl._answerBubble) return messageEl._answerBubble;
+  const bubble = messageEl.querySelector(".bubble");
+  const contentEl = messageEl._contentEl;
+  if (!bubble || !contentEl) return null;
+
+  const answerBubble = document.createElement("div");
+  answerBubble.className = "answer-bubble";
+  answerBubble.hidden = !String(messageEl._rawText || "").trim();
+
+  bubble.appendChild(answerBubble);
+  answerBubble.appendChild(contentEl);
+  bubble.classList.add("has-reasoning");
+
+  messageEl._answerBubble = answerBubble;
+  return answerBubble;
 }
 
 function createReasoningBox(messageEl) {
@@ -2132,6 +2155,7 @@ function createReasoningBox(messageEl) {
 
 function updateReasoningBox(messageEl, rawText) {
   if (!messageEl._reasoningBox) return;
+  createAnswerBubble(messageEl);
   messageEl._reasoningBox.hidden = false;
   if (!messageEl._reasoningBox.classList.contains("expanded")) {
     messageEl._reasoningBox.classList.add("expanded");
