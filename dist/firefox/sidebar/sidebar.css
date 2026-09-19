@@ -114,6 +114,10 @@ body {
   filter: drop-shadow(0 4px 10px rgba(13, 148, 136, 0.35));
 }
 
+.brand-mark img {
+  display: block;
+}
+
 .brand-text {
   min-width: 0;
 }
