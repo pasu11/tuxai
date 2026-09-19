@@ -940,8 +940,13 @@ function bindSettingsTabs() {
     button.addEventListener("click", () => {
       const tab = button.dataset.settingsTab;
       switchSettingsTab(tab);
-      if (tab === "cloud") setMode("cloud");
-      else if (tab === "local") setMode("server");
+      if (tab === "cloud") {
+        setMode("cloud");
+        // Switching to the Cloud tab is an explicit, user-initiated decision
+        // to use a remote provider, so this click is a good place to ask for
+        // data-collection consent (already granted -> no prompt).
+        requestDataConsent().catch(() => {});
+      } else if (tab === "local") setMode("server");
     });
   });
 }
@@ -1088,6 +1093,85 @@ async function handleBackupFileImport(event) {
     const message = error && error.message ? error.message : String(error);
     setStatus(`Import failed: ${message}`);
   }
+}
+
+// ---------- Data collection consent ----------
+// TuxAI only transmits data when the user sends a message or selected text to
+// an AI endpoint. The Firefox manifest declares `personalCommunications` and
+// `websiteContent` as *optional* data-collection permissions, so we must obtain
+// the user's consent before the first non-local request. Once granted, Firefox
+// remembers the choice, so the prompt appears at most once (and the user can
+// revoke it later in about:addons).
+const DATA_COLLECTION_TYPES = ["personalCommunications", "websiteContent"];
+
+// Firefox 140+ exposes the built-in data-collection consent API. Chrome and
+// older Firefox builds do not, in which case there is nothing for us to gate.
+function hasDataCollectionApi() {
+  return (
+    typeof api !== "undefined" &&
+    api.permissions &&
+    typeof api.permissions.getAll === "function" &&
+    typeof api.permissions.request === "function"
+  );
+}
+
+async function isDataConsentGranted() {
+  if (!hasDataCollectionApi()) return true;
+  try {
+    const perms = await api.permissions.getAll();
+    // The `data_collection` key is only present when the built-in consent
+    // system is available.
+    if (!perms || !("data_collection" in perms)) return true;
+    const granted = Array.isArray(perms.data_collection)
+      ? perms.data_collection
+      : [];
+    return DATA_COLLECTION_TYPES.every((type) => granted.includes(type));
+  } catch (error) {
+    return true;
+  }
+}
+
+// Must run from a user gesture (a click); Firefox rejects the request
+// otherwise. Returns true when consent is granted.
+async function requestDataConsent() {
+  if (!hasDataCollectionApi()) return true;
+  if (await isDataConsentGranted()) return true;
+  try {
+    return await api.permissions.request({
+      data_collection: DATA_COLLECTION_TYPES,
+    });
+  } catch (error) {
+    return false;
+  }
+}
+
+// Sending to the user's own machine (a local LLM server) is not data
+// collection, so only remote endpoints require consent.
+function isLocalEndpoint(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === "0.0.0.0" ||
+      host.endsWith(".localhost")
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+const DATA_CONSENT_REFUSED_MESSAGE =
+  "TuxAI needs your permission before it can send your messages or selected " +
+  "text to a cloud provider. Open Settings → Cloud Server to grant it.";
+
+async function ensureDataConsent(endpointUrl) {
+  if (isLocalEndpoint(endpointUrl)) return true;
+  if (await isDataConsentGranted()) return true;
+  if (await requestDataConsent()) return true;
+  appendSystemMessage(DATA_CONSENT_REFUSED_MESSAGE);
+  return false;
 }
 
 // ---------- Mode / connection settings ----------
@@ -2516,6 +2600,8 @@ async function startSpeech(text, button, ui) {
     return;
   }
 
+  if (!(await ensureDataConsent(config.url))) return;
+
   stopActiveSpeech();
 
   const controller = new AbortController();
@@ -2750,6 +2836,11 @@ async function runStreamedChat({
   if (configError) {
     appendSystemMessage(configError);
     return;
+  }
+
+  if (state.mode === "cloud") {
+    const config = buildRequestConfig([]);
+    if (!(await ensureDataConsent(config.url))) return;
   }
 
   const contextSize = parseInt(dom.contextSize.value || "8192", 10);

@@ -35,7 +35,9 @@ This includes:
 - Model names you enter or fetch
 - API keys you enter for cloud providers
 - Saved tools/presets you create
-- UI preferences such as theme and text size
+- UI preferences such as theme, text size, interface size, context size, and language
+- Chat sessions (message text) used by the history panel
+- Text-to-speech settings (provider, model, voice, and optional URL/key override)
 - Temporary delivery data used to send a selected text or context-menu run from a webpage to the sidebar
 
 These values stay in your browser's extension storage. They are not sent anywhere except when a request is needed for the configured AI provider.
@@ -44,18 +46,31 @@ These values stay in your browser's extension storage. They are not sent anywher
 
 Temporary selected-text and pending-run data is removed after the sidebar handles it.
 
-Chat history exists only in memory while the sidebar is open. It is not written to disk. Use **Clear chat** in the sidebar to clear the current conversation.
+## Chat history
+
+Chat sessions are saved in extension-local storage so the history panel survives restarts. Use the history panel to delete individual sessions, or **Delete all** to clear them. The **Settings → Misc** backup file includes chat history along with the rest of your settings, so keep any exported backup file safe.
 
 ## What leaves your browser
 
 Only user-triggered requests:
 
 1. **Model list fetch** — when you click a Fetch button, TuxAI asks your configured server for its model list.
-2. **AI chat/action request** — when you send a message or run a tool, TuxAI sends your message/selected text and tool instruction to the configured AI server.
+2. **AI chat/action request** — when you send a message or run a tool, TuxAI sends your message/selected text, any attachments, and the tool instruction to the configured AI server.
+3. **Text-to-speech request** — when you click a speaker button (or **Test** in the Sound settings), TuxAI sends the text to be spoken to the configured TTS endpoint.
 
-If you use a local server such as Ollama, kobold.cpp, or llama.cpp on `localhost`, your data stays on your computer.
+File and image attachments are read in the browser and included only in the request to the configured AI provider. They are not uploaded to any TuxAI server.
 
-If you use a cloud provider such as OpenAI or DeepSeek, your requests go to that provider using the API key you supplied. The provider's own privacy policy then applies.
+If you use a local server such as Ollama, kobold.cpp, or llama.cpp on `localhost`, your data stays on your computer (this includes a local TTS endpoint).
+
+If you use a cloud provider such as OpenAI, DeepSeek, Anthropic, Gemini, Mistral, or Cohere, your requests go to that provider using the API key you supplied. The provider's own privacy policy then applies.
+
+## Data collection consent
+
+On Firefox 140+ the extension declares `personalCommunications` and
+`websiteContent` as *optional* data-collection permissions. Firefox therefore
+asks for your consent the first time you switch to the Cloud Server settings;
+the choice is remembered and can be changed at any time in `about:addons` →
+**Permissions and data**. Local-server usage never triggers this prompt.
 
 ## Permissions
 

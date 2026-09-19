@@ -1,12 +1,21 @@
 {
   "manifest_version": 3,
   "name": "TuxAI",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "An open-source AI sidebar that connects to your local LLM server or a cloud API and lets you run selected text through your tools.",
   "browser_specific_settings": {
     "gecko": {
       "id": "tuxai@local.dev",
-      "strict_min_version": "115.0"
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ],
+        "optional": [
+          "personalCommunications",
+          "websiteContent"
+        ]
+      }
     }
   },
   "action": {

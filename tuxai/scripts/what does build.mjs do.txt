@@ -18,6 +18,9 @@
    content/
    sidebar/
    icons/
+   README.md
+   PRIVACY.md
+   LICENSE
 
    No rewriting needed — Chrome is the "native" format of the source.
 

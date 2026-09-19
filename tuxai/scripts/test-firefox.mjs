@@ -13,9 +13,25 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import fs from "node:fs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.FIREFOX_PORT || 8791);
+
+// Browsers live in ~/.local/share (persistent), not ~/.cache (disposable). The
+// `pw` helper sets this fallback too; non-interactive shells don't source
+// ~/.bashrc, so do it here as well. An explicit env var still wins.
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  const fallback = path.join(
+    process.env.HOME || "",
+    ".local",
+    "share",
+    "ms-playwright"
+  );
+  if (fs.existsSync(fallback)) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = fallback;
+  }
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -264,12 +280,14 @@ async function main() {
         exists: true,
         title: el.querySelector("div") ? el.querySelector("div").textContent : "",
         hasSpeak: !!el.querySelector('[data-tuxai-speak="1"]'),
+        hasCopy: !!el.querySelector('[data-tuxai-copy="1"]'),
         errors: window.__errors || [],
       };
     });
 
     check("popup: appears on Alt+select", popup.exists, popup.title || "");
     check("popup: speaker button present", !!popup.hasSpeak);
+    check("popup: copy button present", !!popup.hasCopy);
     check("popup: no JS errors", (popup.errors || []).length === 0, (popup.errors || []).join(" | "));
 
     if (popup.exists && popup.hasSpeak) {
@@ -277,8 +295,10 @@ async function main() {
       await page2.waitForTimeout(900);
       const speaking = await page2.evaluate(() => {
         const b = document.querySelector('[data-tuxai-speak="1"]');
+        const anims = b && b.getAnimations ? b.getAnimations() : [];
         return {
           title: b ? b.title : "",
+          animated: anims.length > 0,
           calls: window.__calls || [],
           errors: window.__errors || [],
         };
@@ -289,6 +309,11 @@ async function main() {
         speaking.title || ""
       );
       check(
+        "popup: speaker pulses while speaking",
+        !!speaking.animated,
+        `animations=${speaking.animated}`
+      );
+      check(
         "popup: speak message sent",
         (speaking.calls || []).some((c) => c.type === "penguin_popup_speak"),
         JSON.stringify(speaking.calls || [])
@@ -297,6 +322,44 @@ async function main() {
         "popup: no errors during playback",
         (speaking.errors || []).length === 0,
         (speaking.errors || []).join(" | ")
+      );
+
+      // Run a tool and verify the result bubble keeps the copy/speaker strip
+      // inside it and that Back is placed to the left of Close.
+      await page2.click(
+        '[data-tuxai-quick="1"] button:not([data-tuxai-speak]):not([data-tuxai-copy])'
+      );
+      await page2.waitForTimeout(700);
+      const result = await page2.evaluate(() => {
+        const el = document.querySelector('[data-tuxai-quick="1"]');
+        if (!el) return { exists: false };
+        const labels = [...el.querySelectorAll("button")].map((b) =>
+          (b.textContent || "").trim()
+        );
+        return {
+          exists: true,
+          hasCopy: !!el.querySelector('[data-tuxai-copy="1"]'),
+          hasSpeak: !!el.querySelector('[data-tuxai-speak="1"]'),
+          backIndex: labels.indexOf("Back"),
+          closeIndex: labels.indexOf("Close"),
+          errors: window.__errors || [],
+        };
+      });
+      check(
+        "popup: result keeps copy + speaker inside bubble",
+        result.exists && result.hasCopy && result.hasSpeak
+      );
+      check(
+        "popup: Back is left of Close",
+        result.backIndex >= 0 &&
+          result.closeIndex >= 0 &&
+          result.backIndex < result.closeIndex,
+        `back=${result.backIndex} close=${result.closeIndex}`
+      );
+      check(
+        "popup: no errors after running a tool",
+        (result.errors || []).length === 0,
+        (result.errors || []).join(" | ")
       );
     }
     await ctx2.close();

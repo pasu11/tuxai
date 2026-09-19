@@ -51,6 +51,7 @@
   let popupAudioCtx = null;
   let popupSource = null;
   let popupSpeakButton = null;
+  let popupSpeakAnimation = null;
 
   function normalizeShortcut(value) {
     return SHORTCUT_MODES.has(value) ? value : "alt";
@@ -194,7 +195,41 @@
       '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
   };
 
+  const COPY_ICONS = {
+    copy:
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
+    copied:
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+  };
+
+  // Same pulse the sidebar's `.speak-message-btn.speaking` uses: opacity
+  // 1 -> 0.45 -> 1 on a 1.2s loop. Content scripts have no stylesheet, so
+  // drive it with the Web Animations API instead of a CSS class.
+  function startSpeakPulse(button) {
+    stopSpeakPulse();
+    if (!button || typeof button.animate !== "function") return;
+    try {
+      popupSpeakAnimation = button.animate(
+        [{ opacity: 1 }, { opacity: 0.45 }, { opacity: 1 }],
+        { duration: 1200, iterations: Infinity, easing: "ease-in-out" }
+      );
+    } catch (error) {
+      popupSpeakAnimation = null;
+    }
+  }
+
+  function stopSpeakPulse() {
+    if (!popupSpeakAnimation) return;
+    try {
+      popupSpeakAnimation.cancel();
+    } catch (error) {
+      // No-op.
+    }
+    popupSpeakAnimation = null;
+  }
+
   function speakButtonIdle(button) {
+    stopSpeakPulse();
     button.disabled = false;
     button.style.color = "#ffffff";
     button.style.background = "#0d9488";
@@ -310,16 +345,114 @@
     return button;
   }
 
-  function createSpeakRow(getText) {
+  async function copyTextToClipboard(text) {
+    const value = String(text || "");
+    if (!value) return false;
+    // Preferred path. In a content script this can be rejected by the page
+    // CSP or a missing permissions policy, so fall back to execCommand.
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch (error) {
+      // Fall through.
+    }
+    try {
+      const area = document.createElement("textarea");
+      area.value = value;
+      area.setAttribute("readonly", "1");
+      Object.assign(area.style, {
+        position: "fixed",
+        top: "0",
+        left: "-9999px",
+        opacity: "0",
+      });
+      document.body.appendChild(area);
+      area.select();
+      area.setSelectionRange(0, value.length);
+      const ok = document.execCommand("copy");
+      document.body.removeChild(area);
+      return ok;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function createCopyIconButton(getText) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-tuxai-copy", "1");
+    button.title = t("msg.copy", "Copy");
+    Object.assign(button.style, {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "28px",
+      height: "28px",
+      padding: "0",
+      background: "#1e293b",
+      color: "#e2e8f0",
+      border: "1px solid #334155",
+      borderRadius: "8px",
+      cursor: "pointer",
+      boxSizing: "border-box",
+    });
+    button.innerHTML = COPY_ICONS.copy;
+
+    let resetTimer = null;
+    const reset = () => {
+      resetTimer = null;
+      button.style.background = "#1e293b";
+      button.style.borderColor = "#334155";
+      button.style.color = "#e2e8f0";
+      button.innerHTML = COPY_ICONS.copy;
+      button.title = t("msg.copy", "Copy");
+    };
+
+    button.addEventListener("click", async (event) => {
+      // Do not let the parent bubble toggle when the copy button is clicked.
+      event.stopPropagation();
+      const ok = await copyTextToClipboard(getText());
+      if (resetTimer) clearTimeout(resetTimer);
+      if (ok) {
+        button.style.background = "#0f766e";
+        button.style.borderColor = "#0f766e";
+        button.style.color = "#ffffff";
+        button.innerHTML = COPY_ICONS.copied;
+        button.title = t("msg.copied", "Copied!");
+      } else {
+        button.style.background = "#7f1d1d";
+        button.style.borderColor = "#7f1d1d";
+        button.style.color = "#ffffff";
+        button.title = t("msg.copyFailed", "Copy failed");
+      }
+      resetTimer = setTimeout(reset, 1400);
+    });
+
+    return button;
+  }
+
+  // A right-aligned action strip that lives *inside* a text bubble: the copy
+  // button on the left, the speaker on the right.
+  function createBubbleActionRow(children) {
     const row = document.createElement("div");
     Object.assign(row.style, {
       display: "flex",
       alignItems: "center",
       gap: "6px",
-      marginTop: "10px",
+      marginTop: "0",
+      justifyContent: "flex-end",
     });
-    row.appendChild(createSpeakIconButton(getText));
+    for (const child of children) row.appendChild(child);
     return row;
+  }
+
+  function createBubbleActions(getText) {
+    return createBubbleActionRow([
+      createCopyIconButton(getText),
+      createSpeakIconButton(getText),
+    ]);
   }
 
   async function speakPopupText(text, button) {
@@ -348,6 +481,7 @@
 
     button.disabled = true;
     button.title = t("popup.generating", "Generating speech...");
+    startSpeakPulse(button);
 
     const startUi = () => {
       button.disabled = false;
@@ -454,6 +588,7 @@
       button.disabled = false;
       button.innerHTML = SPEAK_ICONS.error;
       button.title = (error && error.message) || t("popup.failed", "Text-to-speech failed.");
+      stopSpeakPulse();
       setTimeout(() => {
         if (popupSpeakButton === button) return;
         speakButtonIdle(button);
@@ -683,16 +818,11 @@
         setExpanded(preview.getAttribute("data-tuxai-preview-expanded") !== "1");
       });
 
-      const speakRow = document.createElement("div");
-      Object.assign(speakRow.style, {
-        display: "flex",
-        alignItems: "center",
-        gap: "6px",
-        marginTop: "0",
-        justifyContent: "flex-end",
-      });
-      speakRow.appendChild(hint);
-      speakRow.appendChild(createSpeakIconButton(() => popupSelectedText));
+      const speakRow = createBubbleActionRow([
+        hint,
+        createCopyIconButton(() => popupSelectedText),
+        createSpeakIconButton(() => popupSelectedText),
+      ]);
       preview.appendChild(speakRow);
 
       popupContent.appendChild(preview);
@@ -752,17 +882,11 @@
     const row = document.createElement("div");
     Object.assign(row.style, {
       display: "flex",
-      justifyContent: "flex-end",
+      justifyContent: "space-between",
       alignItems: "center",
       gap: "6px",
       marginTop: "10px",
     });
-
-    if (popupResultText.trim()) {
-      const speakButton = createSpeakIconButton(() => popupResultText);
-      speakButton.style.marginRight = "auto";
-      row.appendChild(speakButton);
-    }
 
     const backButton = document.createElement("button");
     backButton.type = "button";
@@ -805,21 +929,32 @@
     popupContent.innerHTML = "";
 
     const result = document.createElement("div");
-    result.textContent = text;
     Object.assign(result.style, {
-      maxHeight: "280px",
-      overflowY: "auto",
-      whiteSpace: "pre-wrap",
-      wordBreak: "break-word",
-      color: "#ffffff",
+      display: "flex",
+      flexDirection: "column",
+      gap: "6px",
       background: "#111827",
       border: "1px solid #ffffff",
       borderRadius: "8px",
       padding: "10px",
       userSelect: "text",
       WebkitUserSelect: "text",
+    });
+
+    // The text scrolls on its own so the copy/speaker strip stays parked in the
+    // bottom-right corner of the bubble no matter how long the reply is.
+    const resultText = document.createElement("div");
+    resultText.textContent = popupResultText;
+    Object.assign(resultText.style, {
+      maxHeight: "280px",
+      overflowY: "auto",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word",
+      color: "#ffffff",
       cursor: "text",
     });
+    result.appendChild(resultText);
+    result.appendChild(createBubbleActions(() => popupResultText));
     popupContent.appendChild(result);
     popupContent.appendChild(renderPopupActionRow());
     clampPopupToViewport();

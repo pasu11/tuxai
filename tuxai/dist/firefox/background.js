@@ -13,23 +13,23 @@ const TOOL_STORAGE_KEYS = {
 const BUILTIN_TOOLS = [
   {
     id: "translate",
-    name: "翻译",
-    prompt: "翻译成中文",
+    name: "translate",
+    prompt: "translate to english",
   },
   {
     id: "summarize",
-    name: "总结",
-    prompt: "用中文精简总结",
+    name: "summarize",
+    prompt: "summarize",
   },
   {
     id: "grammar",
-    name: "修正语法",
-    prompt: "请纠正文本中的语法、拼写、标点和用词错误，保留原意，不要改写。",
+    name: "fix grammar",
+    prompt: "Please correct grammar, spelling, punctuation, and word usage errors in the text, retain the original meaning, and do not rewrite it.",
   },
   {
     id: "polish",
-    name: "优化表达",
-    prompt: "请改善文本的表达，使其更清晰、流畅、自然，但不要改变原意。",
+    name: "improve sentences",
+    prompt: "Please improve the expression of the text to make it clearer, smoother, and more natural, but do not change the original meaning.",
   },
 ];
 

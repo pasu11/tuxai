@@ -4,22 +4,27 @@ TuxAI is an open-source AI assistant browser extension for Chrome, Vivaldi, and 
 
 It provides:
 
-- A sidebar chat interface
-- Local LLM server support (Ollama, kobold.cpp, llama.cpp, or OpenAI-compatible servers)
-- Cloud API support (OpenAI, DeepSeek)
+- A sidebar chat interface with streaming responses, Markdown rendering, and collapsible reasoning output
+- Local LLM server support (Ollama, kobold.cpp, llama.cpp, or any OpenAI-compatible server)
+- Cloud API support (DeepSeek, OpenAI, Anthropic Claude, Google Gemini, Mistral, Cohere, plus custom OpenAI-compatible providers)
 - Plain text selection that automatically sends selected text to the sidebar
-- Configurable quick-select shortcut that opens a floating popup
-- Tool/action buttons that run selected text through AI directly in the popup
+- A configurable quick-select shortcut that opens a floating popup with tool buttons
 - Right-click context menu for running tools on selected text
-- Light/dark theme
-- Adjustable text size
+- Reusable tools (system-prompt presets) with built-in defaults and full create/edit/delete support
+- Text-to-speech (read assistant replies aloud, in the sidebar or the page popup)
+- Chat history (previous sessions are saved locally and can be reopened or deleted)
+- File and image attachments
+- Backup/restore of all settings (including API keys, models, tools, and chat history) as a JSON file
+- Bilingual UI (English / 中文)
+- Light/dark theme, adjustable text size, interface scale, and context size
 
 ## Requirements
 
 - Chrome, Chromium, Vivaldi, Edge, or another Chromium browser
-- Firefox 115+ (for the Firefox build)
+- Firefox 140+ (for the Firefox build; required for Firefox's built-in data-collection consent)
 - For local-server mode: a running LLM server such as Ollama, kobold.cpp, llama.cpp, or another OpenAI-compatible server
-- For cloud mode: an API key for OpenAI, DeepSeek, or another OpenAI-compatible cloud endpoint
+- For cloud mode: an API key for one of the supported providers or another OpenAI-compatible cloud endpoint
+- For text-to-speech: an OpenAI-compatible speech endpoint (for example OpenAI with `gpt-4o-mini-tts`)
 
 ## Install
 
@@ -63,6 +68,14 @@ To create a permanent installable `.xpi`, you can package the `dist/firefox` fol
 cd dist/firefox
 web-ext build
 ```
+
+You can also build an installable `.crx` / `.xpi` in one step from the repo:
+
+```bash
+npm run package
+```
+
+This writes `dist/tuxai.crx` and `dist/tuxai.xpi`.
 
 #### Live-reload while developing
 
@@ -150,41 +163,55 @@ npm run build:firefox
 
 ## Usage
 
-### 1. Choose a connection
+Open the TuxAI sidebar, then click the settings (gear) icon in the header. Settings are organized into six tabs: **Cloud Server**, **Local Server**, **UI**, **Sound**, **Tools**, and **Misc**.
 
-Open the TuxAI sidebar and click the settings icon.
+### 1. Choose a connection
 
 #### Local Server mode
 
-1. Choose a backend:
+1. Open the **Local Server** tab.
+2. Choose a backend:
    - **Ollama**
    - **kobold.cpp**
    - **llama.cpp**
    - **Other** (OpenAI-compatible server)
-2. Enter the endpoint URL, or use the default shown for the selected backend.
-3. Click **Fetch** to load available models, or enter the model name manually.
+3. Enter the endpoint URL, or use the default shown for the selected backend.
+4. Click **Fetch** to load available models, or add a custom model with the **+** button.
+5. Enable/disable models in the model manager; the selected model appears in the composer dropdown.
 
 #### Cloud API mode
 
-1. Choose **Cloud API**.
+1. Open the **Cloud Server** tab.
 2. Select a provider:
-   - **OpenAI**
    - **DeepSeek**
-3. Enter the API key.
-4. Fetch the model list or use the preset model list.
+   - **OpenAI**
+   - **Anthropic Claude**
+   - **Google Gemini**
+   - **Mistral**
+   - **Cohere**
+   - Any custom provider you add with the **+** button (name + OpenAI-compatible URL)
+3. Enter the API URL and API key.
+4. Fetch the model list or add models manually.
+5. Pick the model from the composer dropdown.
+
+API keys are stored only in the extension's local browser storage. Each provider keeps its own URL, key, and model selection.
 
 ### 2. Chat normally
 
-- Type a message in the sidebar and press **Enter** or click the send button.
-- Select an **Active tool** under **Settings → Chat options**.
-- The active tool provides the system prompt for normal chat.
+- Type a message in the sidebar and press **Enter** (or click send). Use **Shift+Enter** for a new line.
+- The input box grows to show at least three lines.
+- Attach images or text files with the **attach** (paperclip) button.
+- Responses stream in; Markdown is rendered live, and reasoning output is shown in a collapsible box when the model provides it.
+- Click the copy icon under any message to copy its full text.
+- Click the speaker icon under an assistant message to read it aloud (see [Text-to-speech](#7-text-to-speech)).
+- Use the **+** button to start a new chat, and the **history** button to reopen previous sessions. Chat sessions are saved in local browser storage.
 
 ### 3. Send selected text to the sidebar
 
 1. Select any text on a webpage normally, without holding a modifier key.
-2. The sidebar opens automatically.
+2. The selected text is delivered to the TuxAI sidebar (open the sidebar if it is not already open).
 3. The selected text appears in the **"From your selected text"** card.
-4. Click one of the tool buttons to run an action on that text.
+4. Click one of the tool buttons to run an action on that text, or type a follow-up question.
 
 ### 4. Use the floating quick popup
 
@@ -192,13 +219,13 @@ By default, holding **Alt** while selecting text opens a small popup:
 
 1. Select text while holding **Alt** (or another configured shortcut).
 2. The TuxAI popup appears.
-3. Click a tool, for example **翻译** or **总结**.
-4. The result is shown directly in the popup.
+3. Click a tool, for example **translate** or **summarize**.
+4. The result is shown directly in the popup. The popup can be dragged by its title bar, and the result can be selected and copied.
 
-You can change the shortcut or disable the popup under:
+You can change the shortcut (Alt, Ctrl, Shift, and combinations) or disable the popup under:
 
 ```
-Settings → Quick select popup
+Settings → UI → Popup shortcut
 ```
 
 ### 5. Use the right-click menu
@@ -215,24 +242,61 @@ The selected text is sent to the sidebar and the tool runs there.
 Open:
 
 ```
-Settings → Manage tools
+Settings → Tools
 ```
 
 - Create new tools with a name and system prompt.
 - Edit existing tools.
 - Delete tools.
 - Reset to the default tools:
-  - **翻译** → `翻译成中文`
-  - **总结** → `用中文精简总结`
+  - **translate** → `translate to english`
+  - **summarize** → `summarize`
+  - **fix grammar** → correct grammar, spelling, punctuation, and word usage without rewriting
+  - **improve sentences** → improve clarity, flow, and naturalness without changing the meaning
 
-### 7. Theme and text size
+Tools are applied to selected text through the selection panel, the floating quick popup, and the right-click menu.
 
-- Use the theme button in the top-right corner to switch between light and dark mode.
-- Adjust the text size under:
-  ```
-  Settings → Chat options → Text size (px)
-  ```
-  The default is `14px`; the accepted range is `10–24px`.
+### 7. Text-to-speech
+
+Open:
+
+```
+Settings → Sound
+```
+
+- Choose a **TTS provider**. It is independent of the chat provider, so you can chat with one provider and speak with another. Leave it as **Same as chat provider** to reuse the chat connection, or pick a cloud provider (for example OpenAI) to reuse that provider's stored key.
+- Enter a **TTS model** and click **Use** to load its voices. If the model does not support text-to-speech, the Voice field shows **TTS not supported**.
+- The **TTS API URL** and **TTS API key** fields are optional overrides.
+- Pick a **Voice** and click **Test** to preview it.
+- Click the speaker icon under an assistant message, or the speaker button in the quick popup, to read the text aloud. Click it again to stop.
+
+For example, chat with DeepSeek while speaking with OpenAI: set the TTS provider to **OpenAI**, the TTS model to `gpt-4o-mini-tts`, and choose a voice.
+
+### 8. UI settings
+
+Open:
+
+```
+Settings → UI
+```
+
+- **Theme**: use the theme button in the top-right corner to switch between light and dark mode.
+- **Text size (px)**: default `14px`, range `10–24px`.
+- **Context size**: history trimming budget (`4096`, `8192`, `16384`, `32768`).
+- **Interface size**: scales the whole sidebar (80%–150%, default 100%).
+- **Language**: Auto (follow browser), English, or 中文. Applies to the sidebar and the page popup.
+- **Popup shortcut**: the modifier used to open the floating quick popup.
+
+### 9. Backup and restore
+
+Open:
+
+```
+Settings → Misc
+```
+
+- **Export settings backup** saves all settings — including API keys, models, tools, theme, selected-text preferences, and chat history — to a JSON file.
+- **Import settings backup** restores a previously exported file and reloads the sidebar.
 
 ## Project structure
 
@@ -243,10 +307,15 @@ sidebar/sidebar.html       # Sidebar UI
 sidebar/sidebar.css        # Sidebar styles
 sidebar/sidebar.js         # Sidebar logic
 lib/tools.js               # Shared tool definitions and storage helpers
+lib/i18n.js                # English/Chinese UI strings
 lib/markdown.js            # Small Markdown renderer
 manifest.json              # Chrome/Vivaldi manifest
 manifest.firefox.json      # Firefox manifest template
 scripts/build.mjs          # Build script
+scripts/package.mjs        # CRX/XPI packaging
+scripts/run-firefox.sh     # web-ext live-reload helper
+scripts/test-firefox.mjs   # Playwright-Firefox smoke test
+Documents/                 # Bilingual developer/user documentation (ODT + Markdown)
 dist/chrome                # Generated Chrome/Vivaldi package
 dist/firefox               # Generated Firefox package
 ```
@@ -262,7 +331,7 @@ See the full [PRIVACY.md](PRIVACY.md) for details.
 - Local-server requests go directly to the LLM server you configure.
 - Cloud requests go directly from your browser to the cloud provider you select.
 - API keys are stored only in the extension's local browser storage.
-- Chat history is kept in memory only while the sidebar is open.
+- Chat sessions, settings, and attachments are stored in the extension's local browser storage, not in the cloud.
 
 ## Credits
 
