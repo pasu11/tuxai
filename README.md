@@ -1,6 +1,6 @@
 # TuxAI
 
-TuxAI is an open-source AI assistant browser extension for Chrome and Firefox.
+TuxAI is an open-source AI assistant browser extension for Chrome, Vivaldi, and Firefox.
 
 It provides:
 
@@ -14,18 +14,16 @@ It provides:
 - Light/dark theme
 - Adjustable text size
 
-<img width="1920" height="1080" alt="image" src="https://github.com/pasu11/tuxai/blob/main/screenshots/01.jpg" />
-
 ## Requirements
 
-- Chrome, Firefox, Chromium, Vivaldi, or another Chromium/Firefox based browser
+- Chrome, Chromium, Vivaldi, Edge, or another Chromium browser
 - Firefox 115+ (for the Firefox build)
 - For local-server mode: a running LLM server such as Ollama, kobold.cpp, llama.cpp, or another OpenAI-compatible server
 - For cloud mode: an API key for OpenAI, DeepSeek, or another OpenAI-compatible cloud endpoint
 
 ## Install
 
-### Chrome / Firefox
+### Chrome / Vivaldi / Chromium
 
 #### Option A: Load the built folder
 
@@ -196,7 +194,6 @@ scripts/build.mjs          # Build script
 dist/chrome                # Generated Chrome/Vivaldi package
 dist/firefox               # Generated Firefox package
 ```
-
 
 ## Privacy
 
