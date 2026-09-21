@@ -1,0 +1,8 @@
+# Extension settings / chat-history exports.
+# These contain API keys in plaintext, so they must never be committed.
+tuxai-backup-*.json
+backups/
+
+# Local-only secrets
+.env
+.env.*
