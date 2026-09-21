@@ -1,0 +1,13 @@
+1.0.1
+
+1.0.2
+-add pin to popup
+-add tab session
+-text bubble colors
+-seperating chat history backup/restore from other settings.
+-add copy function to each AI response that contains scripts or code blocks.
+-disable autoscroll
+-fix history button
+-upload fix
+
+

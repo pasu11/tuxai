@@ -257,18 +257,51 @@
 
       <div id="settings-page-misc" class="settings-page" role="tabpanel" aria-labelledby="settings-tab-misc" hidden>
         <div class="settings-card">
-          <div class="settings-card-title" data-i18n="misc.title">Backup/Restore</div>
+          <div class="settings-card-title" data-i18n="misc.title">Backup/Restore settings</div>
           <div class="tool-actions">
             <button id="backup-export-btn" type="button" class="button button-secondary" data-i18n="misc.export">Export settings backup</button>
             <button id="backup-import-btn" type="button" class="button button-secondary" data-i18n="misc.import">Import settings backup</button>
           </div>
           <input id="backup-file-input" type="file" accept="application/json,.json" hidden />
-          <p class="hint" data-i18n="misc.hint">Export saves all settings, including API keys, models, tools, theme, and chat history to a JSON file. Import restores them and reloads the sidebar.</p>
+          <p class="hint" data-i18n="misc.hint">Export saves all settings, including API keys, models, and every tool (name and prompt). Chat history is not included. Import restores them and reloads the sidebar.</p>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-title" data-i18n="misc.historyTitle">Backup/Restore chat history</div>
+          <div class="tool-actions">
+            <button id="history-export-btn" type="button" class="button button-secondary" data-i18n="misc.historyExport">Export chat history</button>
+            <button id="history-import-btn" type="button" class="button button-secondary" data-i18n="misc.historyImport">Import chat history</button>
+          </div>
+          <input id="history-file-input" type="file" accept="application/json,.json" hidden />
+          <p class="hint" data-i18n="misc.historyHint">Export saves every chat session and open tab. Import replaces the current chat history and reloads the sidebar.</p>
         </div>
       </div>
     </section>
 
-    <main id="chat" class="chat" aria-live="polite"></main>
+    <div class="chat-wrapper">
+      <main id="chat" class="chat" aria-live="polite"></main>
+      <button id="scroll-to-bottom-btn" class="scroll-to-bottom-btn" type="button" hidden title="Scroll to latest" aria-label="Scroll to latest" data-i18n-title="composer.scrollToBottom" data-i18n-aria-label="composer.scrollToBottom">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14"></path>
+          <path d="m19 12-7 7-7-7"></path>
+        </svg>
+      </button>
+
+      <div id="history-panel" class="history-panel" hidden>
+        <div class="history-panel-header">
+          <button id="history-close" type="button" class="history-back-btn" title="Back" aria-label="Back" data-i18n-title="history.back" data-i18n-aria-label="history.back">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 12H5"></path>
+              <path d="m12 19-7-7 7-7"></path>
+            </svg>
+            <span data-i18n="history.back">Back</span>
+          </button>
+          <span class="history-panel-title" data-i18n="history.title">Previous chat sessions</span>
+          <button id="history-delete-all" type="button" class="text-button danger-text" data-i18n="history.deleteAll">Delete all</button>
+        </div>
+        <div id="history-list" class="history-list"></div>
+      </div>
+    </div>
 
     <section id="selection-panel" class="selection-panel" hidden>
       <div class="selection-header">
@@ -303,7 +336,7 @@
           </svg>
         </button>
         <input id="file-input" type="file" multiple hidden />
-        <button id="history-btn" type="button" class="composer-icon-btn" title="Previous chat sessions" aria-label="Previous chat sessions" data-i18n-title="composer.history" data-i18n-aria-label="composer.history">
+        <button id="history-btn" type="button" class="composer-icon-btn" title="Previous chat sessions" aria-label="Previous chat sessions" aria-expanded="false" data-i18n-title="composer.history" data-i18n-aria-label="composer.history">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="9"></circle>
             <path d="M12 7v5l3 2"></path>
@@ -328,6 +361,17 @@
           data-i18n-placeholder="composer.ask"
           data-i18n-aria-label="composer.message"
         ></textarea>
+      </div>
+
+      <div class="composer-bottom">
+        <button id="new-tab-btn" type="button" class="new-tab-btn" title="New tab" aria-label="New tab" data-i18n-title="composer.newTab" data-i18n-aria-label="composer.newTab">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="6" width="18" height="14" rx="2"></rect>
+            <line x1="12" y1="10" x2="12" y2="16"></line>
+            <line x1="9" y1="13" x2="15" y2="13"></line>
+          </svg>
+        </button>
+        <nav id="chat-tabs" class="chat-tabs" aria-label="Chat tabs"></nav>
         <button id="send-btn" type="button" class="send-btn" title="Send message" aria-label="Send message" disabled data-i18n-title="composer.send" data-i18n-aria-label="composer.send">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 2 11 13"></path>
@@ -336,22 +380,6 @@
         </button>
       </div>
     </footer>
-
-    <div id="history-panel" class="history-panel" hidden>
-      <div class="history-panel-header">
-        <span data-i18n="history.title">Previous chat sessions</span>
-        <div class="history-panel-actions">
-          <button id="history-delete-all" type="button" class="text-button danger-text" data-i18n="history.deleteAll">Delete all</button>
-          <button id="history-close" type="button" class="selection-close" aria-label="Close history" data-i18n-aria-label="history.close">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M18 6 6 18"></path>
-              <path d="M6 6l12 12"></path>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div id="history-list" class="history-list"></div>
-    </div>
 
     <script src="../lib/i18n.js"></script>
     <script type="module" src="sidebar.js"></script>

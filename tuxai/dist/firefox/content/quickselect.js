@@ -52,6 +52,7 @@
   let popupSource = null;
   let popupSpeakButton = null;
   let popupSpeakAnimation = null;
+  let popupPinned = false;
 
   function normalizeShortcut(value) {
     return SHORTCUT_MODES.has(value) ? value : "alt";
@@ -175,6 +176,7 @@
   function closePopup() {
     stopPopupSpeech();
     popupDrag = null;
+    popupPinned = false;
     if (popupEl && popupEl.parentNode) {
       popupEl.parentNode.removeChild(popupEl);
     }
@@ -184,6 +186,13 @@
     popupToolList = [];
     popupSelectedText = "";
     popupResultText = "";
+  }
+
+  // Auto-dismiss (outside click, Escape, window blur) is suppressed while the
+  // popup is pinned; only the explicit Close button may then remove it.
+  function closePopupIfUnpinned() {
+    if (popupPinned) return;
+    closePopup();
   }
 
   const SPEAK_ICONS = {
@@ -200,6 +209,13 @@
       '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
     copied:
       '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+  };
+
+  const PIN_PATH =
+    '<path d="M12 17v5"></path><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"></path>';
+  const PIN_ICONS = {
+    unpinned: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${PIN_PATH}</svg>`,
+    pinned: `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${PIN_PATH}</svg>`,
   };
 
   // Same pulse the sidebar's `.speak-message-btn.speaking` uses: opacity
@@ -626,20 +642,77 @@
       boxSizing: "border-box",
     });
 
+    const header = document.createElement("div");
+    Object.assign(header.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      marginBottom: "8px",
+    });
+
     popupTitle = document.createElement("div");
     popupTitle.textContent = titleText;
     popupTitle.title = "Drag to move";
     Object.assign(popupTitle.style, {
+      flex: "1 1 auto",
+      minWidth: "0",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
       fontSize: "11px",
       fontWeight: "600",
       letterSpacing: "0.4px",
       color: "#5eead4",
       textTransform: "uppercase",
-      marginBottom: "8px",
       cursor: "move",
     });
     popupTitle.addEventListener("mousedown", popupDragStart);
-    el.appendChild(popupTitle);
+    header.appendChild(popupTitle);
+
+    const pinButton = document.createElement("button");
+    pinButton.type = "button";
+    pinButton.setAttribute("data-tuxai-pin", "1");
+    Object.assign(pinButton.style, {
+      flex: "0 0 auto",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "22px",
+      height: "22px",
+      padding: "0",
+      border: "1px solid transparent",
+      borderRadius: "6px",
+      background: "transparent",
+      color: "#94a3b8",
+      cursor: "pointer",
+      lineHeight: "0",
+    });
+    const updatePinButton = () => {
+      pinButton.innerHTML = popupPinned
+        ? PIN_ICONS.pinned
+        : PIN_ICONS.unpinned;
+      pinButton.title = popupPinned
+        ? t("popup.unpin", "Unpin")
+        : t("popup.pin", "Pin");
+      pinButton.style.color = popupPinned ? "#5eead4" : "#94a3b8";
+      pinButton.style.borderColor = popupPinned ? "#14b8a6" : "transparent";
+      pinButton.style.background = popupPinned
+        ? "rgba(20, 184, 166, 0.15)"
+        : "transparent";
+    };
+    pinButton.addEventListener("mousedown", (event) => {
+      // Never start a drag while toggling the pin.
+      event.stopPropagation();
+    });
+    pinButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      popupPinned = !popupPinned;
+      updatePinButton();
+    });
+    updatePinButton();
+    header.appendChild(pinButton);
+
+    el.appendChild(header);
 
     popupContent = document.createElement("div");
     el.appendChild(popupContent);
@@ -717,7 +790,7 @@
   function renderToolList(tools, text) {
     popupToolList = tools;
     popupSelectedText = text;
-    popupTitle.textContent = t("popup.pickTool", "TuxAI · pick a tool");
+    popupTitle.textContent = t("popup.pickTool", "Pick a tool");
     popupContent.innerHTML = "";
 
     if (!tools.length) {
@@ -874,7 +947,7 @@
   }
 
   function showToolPicker(tools, x, y, text) {
-    createPopup(x, y, t("popup.pickTool", "TuxAI · pick a tool"));
+    createPopup(x, y, t("popup.pickTool", "Pick a tool"));
     renderToolList(tools, text);
   }
 
@@ -925,7 +998,7 @@
 
   function showPopupResult(text, titleText) {
     popupResultText = String(text || "");
-    popupTitle.textContent = titleText || t("popup.result", "TuxAI · result");
+    popupTitle.textContent = titleText || t("popup.result", "Result");
     popupContent.innerHTML = "";
 
     const result = document.createElement("div");
@@ -963,7 +1036,7 @@
   function showPopupError(error, titleText) {
     stopPopupSpeech();
     popupResultText = "";
-    popupTitle.textContent = titleText || t("popup.error", "TuxAI · error");
+    popupTitle.textContent = titleText || t("popup.error", "Error");
     popupContent.innerHTML = "";
 
     const message = document.createElement("div");
@@ -987,7 +1060,7 @@
   function showPopupLoading(message, titleText) {
     stopPopupSpeech();
     popupResultText = "";
-    popupTitle.textContent = titleText || t("popup.working", "TuxAI · working...");
+    popupTitle.textContent = titleText || t("popup.working", "Working...");
     popupContent.innerHTML = "";
     const loading = document.createElement("div");
     loading.textContent = message || t("popup.working", "Processing...");
@@ -1005,7 +1078,7 @@
 
     const tool = popupToolList.find((item) => item.id === toolId);
     const toolName = tool ? tool.name : toolId;
-    const toolTitle = `TuxAI · ${toolName}`;
+    const toolTitle = toolName;
 
     showPopupLoading(t("popup.working", "Running..."), toolTitle);
 
@@ -1017,10 +1090,10 @@
       });
 
       if (response && response.ok) {
-        const label = response.label || "";
+        const model = response.model || "";
         showPopupResult(
           response.text,
-          label ? `${toolTitle} · ${label}` : toolTitle
+          model ? `${toolTitle} · ${model}` : toolTitle
         );
       } else {
         showPopupError(
@@ -1040,7 +1113,7 @@
         .sendMessage({ type: "penguin_get_tools" })
         .then((tools) => {
           if (!tools || !tools.length) {
-            createPopup(x, y, t("popup.error", "TuxAI · error"));
+            createPopup(x, y, t("popup.error", "Error"));
             showPopupError(t("popup.noTools", "No tools available."));
             return;
           }
@@ -1112,7 +1185,7 @@
   document.addEventListener(
     "mousedown",
     (event) => {
-      if (popupEl && !popupEl.contains(event.target)) closePopup();
+      if (popupEl && !popupEl.contains(event.target)) closePopupIfUnpinned();
     },
     true
   );
@@ -1125,14 +1198,17 @@
         return;
       }
       if (popupEl && popupEl.contains(event.target)) return;
+      // A pinned popup ignores every click outside of itself so it stays put
+      // until the user explicitly closes it.
+      if (popupPinned && popupEl) return;
       if (popupEl && !matchesShortcut(event, shortcutMode)) {
-        closePopup();
+        closePopupIfUnpinned();
       }
 
       const text = getSelectionText(event.target);
 
       if (!text) {
-        closePopup();
+        closePopupIfUnpinned();
         clearSidebarSelection();
       } else if (matchesShortcut(event, shortcutMode)) {
         if (popupEl) return;
@@ -1157,12 +1233,12 @@
   document.addEventListener(
     "keydown",
     (event) => {
-      if (event.key === "Escape") closePopup();
+      if (event.key === "Escape") closePopupIfUnpinned();
     },
     true
   );
 
-  window.addEventListener("blur", closePopup);
+  window.addEventListener("blur", closePopupIfUnpinned);
 
   initShortcutSettings();
   initLanguage();

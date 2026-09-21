@@ -146,6 +146,7 @@ const TTS_VOICES_LEGACY = [
   "shimmer",
 ];
 const CHAT_SESSIONS_KEY = "penguin_chat_sessions";
+const CHAT_TABS_KEY = "penguin_chat_tabs";
 const INTERFACE_SCALE_KEY = "penguin_interface_scale";
 const RESTORED_MODEL_KEY = "penguin_restored_model";
 const BACKUP_FORMAT_VERSION = 1;
@@ -174,6 +175,9 @@ const dom = {
   backupExportBtn: document.getElementById("backup-export-btn"),
   backupImportBtn: document.getElementById("backup-import-btn"),
   backupFileInput: document.getElementById("backup-file-input"),
+  historyExportBtn: document.getElementById("history-export-btn"),
+  historyImportBtn: document.getElementById("history-import-btn"),
+  historyFileInput: document.getElementById("history-file-input"),
   serverType: document.getElementById("server-type"),
   serverUrl: document.getElementById("server-url"),
   serverModel: document.getElementById("server-model"),
@@ -227,6 +231,7 @@ const dom = {
   saveTool: document.getElementById("save-tool"),
   deleteTool: document.getElementById("delete-tool"),
   chat: document.getElementById("chat"),
+  scrollToBottomBtn: document.getElementById("scroll-to-bottom-btn"),
   chatStatus: document.getElementById("chat-status"),
   messageInput: document.getElementById("message-input"),
   sendBtn: document.getElementById("send-btn"),
@@ -244,6 +249,8 @@ const dom = {
   attachmentList: document.getElementById("attachment-list"),
   historyBtn: document.getElementById("history-btn"),
   newChatBtn: document.getElementById("new-chat-btn"),
+  newTabBtn: document.getElementById("new-tab-btn"),
+  chatTabs: document.getElementById("chat-tabs"),
   historyPanel: document.getElementById("history-panel"),
   historyList: document.getElementById("history-list"),
   historyClose: document.getElementById("history-close"),
@@ -258,19 +265,65 @@ const state = {
   toolState: { customTools: [], overrides: {}, deleted: [] },
   editingToolId: null,
   selectedText: "",
-  messages: [],
-  attachments: [],
+  // Multiple concurrent conversations. The active tab is projected onto
+  // `state.messages` / `state.attachments` / `state.currentSessionId` below so
+  // the rest of the app keeps using those names unchanged.
+  tabs: [],
+  activeTabId: null,
   sessions: [],
-  currentSessionId: null,
   generating: false,
   abortController: null,
   lastRunKey: null,
   lastRunAt: 0,
 };
 
+function getActiveTab() {
+  return state.tabs.find((tab) => tab.id === state.activeTabId) || null;
+}
+
+Object.defineProperty(state, "messages", {
+  get() {
+    const tab = getActiveTab();
+    return tab ? tab.messages : [];
+  },
+  set(value) {
+    const tab = getActiveTab();
+    if (tab) tab.messages = value;
+  },
+});
+
+Object.defineProperty(state, "attachments", {
+  get() {
+    const tab = getActiveTab();
+    return tab ? tab.attachments : [];
+  },
+  set(value) {
+    const tab = getActiveTab();
+    if (tab) tab.attachments = value;
+  },
+});
+
+Object.defineProperty(state, "currentSessionId", {
+  get() {
+    const tab = getActiveTab();
+    return tab ? tab.sessionId : null;
+  },
+  set(value) {
+    const tab = getActiveTab();
+    if (tab) tab.sessionId = value;
+  },
+});
+
 let uiReady = false;
 let cloudFetchTimer = null;
-let autoScrollToBottom = true;
+// Auto-scroll behavior while a reply streams:
+//   "top"    - follow new text until the reply's top edge (label included) is
+//              pinned near the top of the viewport, then stop (default)
+//   "bottom" - keep the newest text visible (after the ↓ button is clicked)
+//   "off"    - no automatic scrolling (after the user scrolls away)
+const STREAM_TOP_MARGIN = 8;
+let autoScrollMode = "off";
+let lastChatScrollTop = 0;
 const SETTINGS_TAB_IDS = ["cloud", "local", "ui", "sound", "tools", "misc"];
 const SETTINGS_TAB_ALIASES = { chat: "ui", shortcut: "ui" };
 let activeSettingsTab = (() => {
@@ -280,6 +333,10 @@ let activeSettingsTab = (() => {
 })();
 
 document.addEventListener("DOMContentLoaded", init);
+
+window.addEventListener("beforeunload", () => {
+  if (state.tabs.length) saveTabs();
+});
 
 async function init() {
   applyTheme(localStorage.getItem("penguin_theme") || "light");
@@ -308,15 +365,31 @@ async function init() {
   await restoreConnectionSettings();
   await setMode(state.mode, { skipHistory: true });
   await loadChatSessions();
-  state.currentSessionId = createSessionId();
-  await refreshUnifiedModelSelect();
+  await loadTabs();
+  ensureFirstTab();
+
+  const restoredTab = getActiveTab();
+  if (restoredTab && restoredTab.modelId) {
+    const ok = await applyModelToConnection(restoredTab.modelId, {
+      silent: true,
+    });
+    if (!ok) await refreshUnifiedModelSelect();
+  } else {
+    await refreshUnifiedModelSelect();
+  }
+
+  renderChatFromState();
+  renderAttachmentList();
+  renderTabs();
   updateSendButton();
   await processRestoredActiveModel();
   updateSendButton();
 
-  appendSystemMessage(
-    "Connect to a local server or cloud API, pick a tool, then start chatting."
-  );
+  if (!getActiveTab().messages.length) {
+    appendSystemMessage(
+      "Connect to a local server or cloud API, pick a tool, then start chatting."
+    );
+  }
 
   processPendingRun();
   setupPanelStateReporter();
@@ -336,6 +409,11 @@ function bindEvents() {
     dom.backupFileInput.click();
   });
   dom.backupFileInput.addEventListener("change", handleBackupFileImport);
+  dom.historyExportBtn.addEventListener("click", exportChatHistoryBackup);
+  dom.historyImportBtn.addEventListener("click", () => {
+    dom.historyFileInput.click();
+  });
+  dom.historyFileInput.addEventListener("change", handleChatHistoryImport);
   bindSettingsTabs();
   bindSelectionTools();
 
@@ -563,6 +641,7 @@ function bindEvents() {
   dom.deleteTool.addEventListener("click", deleteTool);
   dom.resetTools.addEventListener("click", resetTools);
   dom.newChatBtn.addEventListener("click", clearChat);
+  if (dom.newTabBtn) dom.newTabBtn.addEventListener("click", newTab);
   dom.clearSelection.addEventListener("click", clearSelectedText);
 
   dom.quickModelSelect.addEventListener("change", () => {
@@ -577,22 +656,30 @@ function bindEvents() {
     if (!dom.quickModelPicker.contains(event.target)) closeQuickModelMenu();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeQuickModelMenu();
+    if (event.key !== "Escape") return;
+    closeQuickModelMenu();
+    if (!dom.historyPanel.hidden) hideHistoryPanel();
   });
 
+  applyFileInputAccept();
   dom.attachBtn.addEventListener("click", () => {
-    dom.fileInput.click();
+    openAttachmentPicker();
   });
 
-  dom.fileInput.addEventListener("change", handleSelectedFiles);
+  dom.fileInput.addEventListener("change", () => handleSelectedFiles());
 
-  dom.historyBtn.addEventListener("click", showHistoryPanel);
+  dom.historyBtn.addEventListener("click", toggleHistoryPanel);
   dom.historyClose.addEventListener("click", hideHistoryPanel);
   dom.historyDeleteAll.addEventListener("click", deleteAllSessions);
 
   dom.messageInput.addEventListener("input", () => {
     autoResizeInput();
     updateSendButton();
+    const tab = getActiveTab();
+    if (tab) {
+      tab.draft = dom.messageInput.value;
+      scheduleTabsSave();
+    }
   });
 
   dom.messageInput.addEventListener("keydown", (event) => {
@@ -644,10 +731,18 @@ function bindEvents() {
   dom.chat.addEventListener(
     "scroll",
     () => {
-      autoScrollToBottom = isChatNearBottom();
+      // Scrolling up means the user is reading; pause auto-follow. Downward
+      // movement is usually our own programmatic scroll.
+      if (dom.chat.scrollTop < lastChatScrollTop - 1) autoScrollMode = "off";
+      lastChatScrollTop = dom.chat.scrollTop;
+      updateScrollToBottomButton();
     },
     { passive: true }
   );
+
+  if (dom.scrollToBottomBtn) {
+    dom.scrollToBottomBtn.addEventListener("click", jumpToLatest);
+  }
 }
 
 // ---------- Theme / settings panel ----------
@@ -975,7 +1070,6 @@ function isBackupStorageKey(key) {
     "penguin_custom_tools",
     "penguin_tool_overrides",
     "penguin_tool_deleted",
-    "penguin_chat_sessions",
     // TTS settings are mirrored into storage.local so the background worker
     // can read them; they must be part of the backup too.
     "penguin_tts_model",
@@ -991,6 +1085,31 @@ function isBackupStorageKey(key) {
     return true;
   }
   return false;
+}
+
+// Chat history lives in its own backup so the settings backup stays small and
+// free of conversation data. Open tabs are included as they are live chats.
+const CHAT_HISTORY_STORAGE_KEYS = ["penguin_chat_sessions", "penguin_chat_tabs"];
+
+function isChatHistoryStorageKey(key) {
+  return CHAT_HISTORY_STORAGE_KEYS.includes(key);
+}
+
+function downloadBackupJson(backup, prefix) {
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${prefix}-${new Date()
+    .toISOString()
+    .replace(/[:T]/g, "-")
+    .slice(0, 19)}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 async function exportSettingsBackup() {
@@ -1016,20 +1135,7 @@ async function exportSettingsBackup() {
       activeModel: currentQuickModelId() || "",
     };
 
-    const blob = new Blob([JSON.stringify(backup, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `tuxai-backup-${new Date()
-      .toISOString()
-      .replace(/[:T]/g, "-")
-      .slice(0, 19)}.json`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    downloadBackupJson(backup, "tuxai-backup");
 
     setStatus("Settings backup exported.");
   } catch (error) {
@@ -1088,6 +1194,71 @@ async function handleBackupFileImport(event) {
     }
 
     setStatus("Settings restored. Reloading...");
+    setTimeout(() => location.reload(), 800);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setStatus(`Import failed: ${message}`);
+  }
+}
+
+async function exportChatHistoryBackup() {
+  try {
+    const stored = await api.storage.local.get(CHAT_HISTORY_STORAGE_KEYS);
+    const storageLocal = {};
+    for (const [key, value] of Object.entries(stored)) {
+      if (isChatHistoryStorageKey(key)) storageLocal[key] = value;
+    }
+
+    const backup = {
+      app: "tuxai",
+      kind: "chat-history",
+      formatVersion: BACKUP_FORMAT_VERSION,
+      exportedAt: new Date().toISOString(),
+      storageLocal,
+    };
+
+    downloadBackupJson(backup, "tuxai-chat-history");
+    setStatus("Chat history exported.");
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    setStatus(`Export failed: ${message}`);
+  }
+}
+
+async function handleChatHistoryImport(event) {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+
+    if (
+      !data ||
+      data.app !== "tuxai" ||
+      !data.storageLocal ||
+      typeof data.storageLocal !== "object"
+    ) {
+      setStatus("Invalid TuxAI chat history file.");
+      return;
+    }
+
+    const safeStorage = {};
+    for (const [key, value] of Object.entries(data.storageLocal)) {
+      if (isChatHistoryStorageKey(key)) safeStorage[key] = value;
+    }
+
+    const currentStored = await api.storage.local.get(CHAT_HISTORY_STORAGE_KEYS);
+    const removeKeys = Object.keys(currentStored).filter(
+      (key) => isChatHistoryStorageKey(key) && !(key in safeStorage)
+    );
+    if (removeKeys.length) {
+      await api.storage.local.remove(removeKeys);
+    }
+    await api.storage.local.set(safeStorage);
+
+    setStatus("Chat history restored. Reloading...");
     setTimeout(() => location.reload(), 800);
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
@@ -2132,7 +2303,10 @@ function appendMessage(role, content, options = {}) {
   if (role !== "system") {
     const label = document.createElement("div");
     label.className = "message-label";
-    label.textContent = role === "user" ? t("role.you") : t("role.assistant");
+    label.textContent =
+      role === "user"
+        ? t("role.you")
+        : options.label || t("role.assistant");
     messageEl.appendChild(label);
   }
 
@@ -2143,6 +2317,7 @@ function appendMessage(role, content, options = {}) {
     const contentEl = document.createElement("div");
     contentEl.className = "message-content";
     contentEl.innerHTML = renderMarkdown(content || t("msg.thinking"));
+    decorateCodeBlocks(contentEl);
     bubble.appendChild(contentEl);
     messageEl._contentEl = contentEl;
   } else {
@@ -2180,10 +2355,11 @@ function appendMessage(role, content, options = {}) {
 function updateAssistantContent(messageEl, rawText) {
   if (messageEl._contentEl) {
     messageEl._contentEl.innerHTML = renderMarkdown(rawText || "");
+    decorateCodeBlocks(messageEl._contentEl);
     if (messageEl._answerBubble) {
       messageEl._answerBubble.hidden = !String(rawText || "").trim();
     }
-    scrollChatToBottom();
+    scrollStreamingMessageIntoView(messageEl);
   }
 }
 
@@ -2245,7 +2421,7 @@ function updateReasoningBox(messageEl, rawText) {
     messageEl._reasoningBox.classList.add("expanded");
   }
   messageEl._reasoningContentEl.textContent = rawText;
-  scrollChatToBottom();
+  scrollStreamingMessageIntoView(messageEl);
 }
 
 function isChatNearBottom(threshold = 48) {
@@ -2253,11 +2429,54 @@ function isChatNearBottom(threshold = 48) {
   return dom.chat.scrollHeight - dom.chat.scrollTop - dom.chat.clientHeight < threshold;
 }
 
+// Show the floating button whenever the latest message is out of view.
+function updateScrollToBottomButton() {
+  if (!dom.scrollToBottomBtn) return;
+  dom.scrollToBottomBtn.hidden = isChatNearBottom(80);
+}
+
 function scrollChatToBottom(force = false) {
   if (!dom.chat) return;
-  if (!force && !autoScrollToBottom) return;
+  if (!force && autoScrollMode === "off") return;
   dom.chat.scrollTop = dom.chat.scrollHeight;
-  autoScrollToBottom = true;
+  updateScrollToBottomButton();
+}
+
+// Keeps a streaming reply visible. In "top" mode it scrolls only until the
+// reply's top edge (label included) is pinned near the top of the viewport;
+// in "bottom" mode it keeps chasing the newest text.
+function scrollStreamingMessageIntoView(messageEl) {
+  if (
+    dom.chat &&
+    messageEl &&
+    messageEl.isConnected &&
+    autoScrollMode !== "off"
+  ) {
+    const maxScroll = dom.chat.scrollHeight - dom.chat.clientHeight;
+    let target = maxScroll;
+
+    if (autoScrollMode === "top") {
+      const chatRect = dom.chat.getBoundingClientRect();
+      const messageRect = messageEl.getBoundingClientRect();
+      const messageTop = messageRect.top - chatRect.top + dom.chat.scrollTop;
+      target = Math.max(0, Math.min(maxScroll, messageTop - STREAM_TOP_MARGIN));
+    }
+
+    // Never scroll up: the user may have moved ahead of the pinned position.
+    if (target > dom.chat.scrollTop + 1) {
+      dom.chat.scrollTo({ top: target, behavior: "instant" });
+    }
+  }
+  updateScrollToBottomButton();
+}
+
+// Jump to the latest message and switch to full bottom-following until the
+// user scrolls away again.
+function jumpToLatest() {
+  if (!dom.chat) return;
+  autoScrollMode = "bottom";
+  dom.chat.scrollTop = dom.chat.scrollHeight;
+  updateScrollToBottomButton();
 }
 
 function setStatus(text) {
@@ -2318,29 +2537,87 @@ async function copyTextToClipboard(text) {
   }
 }
 
+const COPY_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+const CHECK_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+// Give every fenced code block in an assistant message its own copy button so
+// users can copy a single snippet instead of the whole reply.
+function decorateCodeBlocks(container) {
+  if (!container || !container.querySelectorAll) return;
+  const blocks = container.querySelectorAll("pre");
+  for (const pre of blocks) {
+    if (pre.parentElement && pre.parentElement.classList.contains("code-block")) {
+      continue;
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "code-block";
+    pre.parentNode.insertBefore(wrapper, pre);
+    wrapper.appendChild(pre);
+
+    const header = document.createElement("div");
+    header.className = "code-block-header";
+
+    const langEl = pre.querySelector("code[class*='language-']");
+    const lang = langEl
+      ? (langEl.className.match(/language-([^\s]+)/) || [])[1] || ""
+      : "";
+    const label = document.createElement("span");
+    label.className = "code-block-lang";
+    label.textContent = lang;
+    header.appendChild(label);
+
+    header.appendChild(createCopyCodeButton(pre));
+    wrapper.insertBefore(header, pre);
+  }
+}
+
+function createCopyCodeButton(pre) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-code-btn";
+  button.title = t("msg.copyCode", "Copy code");
+  button.setAttribute("aria-label", "Copy code block");
+  button.innerHTML = COPY_ICON;
+
+  button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    const codeEl = pre.querySelector("code");
+    const text = codeEl ? String(codeEl.textContent || "") : "";
+    if (!text) return;
+    const ok = await copyTextToClipboard(text);
+    button.classList.add("copied");
+    button.innerHTML = ok ? CHECK_ICON : COPY_ICON;
+    button.title = ok ? t("msg.copied", "Copied!") : t("msg.copyFailed", "Copy failed");
+    setTimeout(() => {
+      button.classList.remove("copied");
+      button.innerHTML = COPY_ICON;
+      button.title = t("msg.copyCode", "Copy code");
+    }, 1200);
+  });
+
+  return button;
+}
+
 function createCopyMessageButton(messageEl) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "copy-message-btn";
   button.title = t("msg.copy", "Copy message");
   button.setAttribute("aria-label", "Copy message text");
-
-  const copyIcon =
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
-  const checkIcon =
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-
-  button.innerHTML = copyIcon;
+  button.innerHTML = COPY_ICON;
   button.addEventListener("click", async () => {
     const text = copyableMessageText(messageEl);
     if (!text) return;
     const ok = await copyTextToClipboard(text);
     button.classList.add("copied");
-    button.innerHTML = ok ? checkIcon : copyIcon;
+    button.innerHTML = ok ? CHECK_ICON : COPY_ICON;
     button.title = ok ? t("msg.copied", "Copied!") : t("msg.copyFailed", "Copy failed");
     setTimeout(() => {
       button.classList.remove("copied");
-      button.innerHTML = copyIcon;
+      button.innerHTML = COPY_ICON;
       button.title = t("msg.copy", "Copy message");
     }, 1200);
   });
@@ -2865,6 +3142,8 @@ async function runStreamedChat({
   if (clearComposer) {
     dom.messageInput.value = "";
     dom.messageInput.style.height = "42px";
+    const composerTab = getActiveTab();
+    if (composerTab) composerTab.draft = "";
     autoResizeInput();
   }
   updateSendButton();
@@ -2875,10 +3154,12 @@ async function runStreamedChat({
 
   const assistantEl = appendMessage("ai", "");
   const modelLabel = getModelLabel();
+  const messageLabel =
+    [labelName, modelLabel].filter(Boolean).join(" · ") ||
+    t("role.assistant", "Assistant");
   const label = assistantEl.querySelector(".message-label");
   if (label) {
-    const labelText = [labelName, modelLabel].filter(Boolean).join(" · ");
-    label.textContent = labelText || "Assistant";
+    label.textContent = messageLabel;
   }
   assistantEl._rawText = "";
   createReasoningBox(assistantEl);
@@ -2897,8 +3178,13 @@ async function runStreamedChat({
   );
   clearAttachments();
 
+  // Start every reply in "top" mode: follow the new text until the reply's
+  // top edge is pinned at the top of the viewport, then stop.
+  autoScrollMode = "top";
+
   state.generating = true;
   updateSendButton();
+  renderTabs();
   setStatus("Connecting...");
 
   const controller = new AbortController();
@@ -2927,7 +3213,11 @@ async function runStreamedChat({
       : userText;
     state.messages.push({ role: "user", content: storedUserText });
     if (fullText.trim()) {
-      state.messages.push({ role: "assistant", content: fullText });
+      state.messages.push({
+        role: "assistant",
+        content: fullText,
+        label: messageLabel,
+      });
       setStatus("Done");
     } else {
       assistantEl.remove();
@@ -2935,6 +3225,8 @@ async function runStreamedChat({
       appendSystemMessage("The model returned an empty response.");
     }
     await saveCurrentSession();
+    renderTabs();
+    scheduleTabsSave();
   } catch (error) {
     if (error && error.name === "AbortError") {
       const partial = assistantEl._rawText || "";
@@ -2960,7 +3252,8 @@ async function runStreamedChat({
     state.generating = false;
     state.abortController = null;
     updateSendButton();
-    scrollChatToBottom();
+    renderTabs();
+    scrollStreamingMessageIntoView(assistantEl);
   }
 }
 
@@ -2997,12 +3290,17 @@ async function clearChat() {
   if (state.generating) stopGenerating();
   hideHistoryPanel();
 
-  if (state.messages.length > 0) {
-    await saveCurrentSession();
+  const tab = getActiveTab();
+  if (tab && tab.messages.length > 0) {
+    await saveTabSession(tab);
   }
-  state.currentSessionId = createSessionId();
-  state.messages = [];
-  state.attachments = [];
+  if (tab) {
+    tab.sessionId = createSessionId();
+    tab.messages = [];
+    tab.attachments = [];
+    tab.title = "";
+    tab.draft = "";
+  }
   dom.chat.innerHTML = "";
   dom.messageInput.value = "";
   dom.messageInput.style.height = "42px";
@@ -3011,6 +3309,234 @@ async function clearChat() {
   setStatus("Ready");
   appendSystemMessage("Chat cleared. Starting a new session.");
   updateSendButton();
+  renderTabs();
+  scheduleTabsSave();
+}
+
+// ---------- Chat tabs (multiple concurrent conversations) ----------
+
+function createTabId() {
+  return `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createTabObject(modelId) {
+  return {
+    id: createTabId(),
+    title: "",
+    messages: [],
+    attachments: [],
+    draft: "",
+    modelId: modelId || "",
+    sessionId: createSessionId(),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+function ensureFirstTab() {
+  if (!state.tabs.length) {
+    const tab = createTabObject(currentQuickModelId());
+    state.tabs = [tab];
+    state.activeTabId = tab.id;
+  }
+  if (!getActiveTab()) state.activeTabId = state.tabs[0].id;
+}
+
+function tabDisplayTitle(tab) {
+  if (!tab) return t("tab.untitled", "New chat");
+  if (tab.title) return tab.title;
+  const first = tab.messages.find((item) => item.role === "user");
+  const text = String((first && first.content) || "").trim();
+  if (!text) return t("tab.untitled", "New chat");
+  return text.length > 24 ? `${text.slice(0, 24)}…` : text;
+}
+
+async function loadTabs() {
+  try {
+    const result = await api.storage.local.get([CHAT_TABS_KEY]);
+    const payload = result[CHAT_TABS_KEY];
+    if (!payload || !Array.isArray(payload.tabs) || !payload.tabs.length) {
+      return;
+    }
+    state.tabs = payload.tabs.map((tab) => ({
+      id: typeof tab.id === "string" && tab.id ? tab.id : createTabId(),
+      title: typeof tab.title === "string" ? tab.title : "",
+      messages: Array.isArray(tab.messages)
+        ? tab.messages.map((m) => ({
+            role: m.role,
+            content:
+              typeof m.content === "string"
+                ? m.content
+                : String(m.content || ""),
+            ...(m.label ? { label: m.label } : {}),
+          }))
+        : [],
+      attachments: [],
+      draft: "",
+      modelId: typeof tab.modelId === "string" ? tab.modelId : "",
+      sessionId:
+        typeof tab.sessionId === "string" && tab.sessionId
+          ? tab.sessionId
+          : createSessionId(),
+      createdAt: typeof tab.createdAt === "number" ? tab.createdAt : Date.now(),
+      updatedAt: typeof tab.updatedAt === "number" ? tab.updatedAt : Date.now(),
+    }));
+    state.activeTabId = state.tabs.some((tab) => tab.id === payload.activeTabId)
+      ? payload.activeTabId
+      : state.tabs[0].id;
+  } catch (error) {
+    // No-op.
+  }
+}
+
+async function saveTabs() {
+  const payload = {
+    activeTabId: state.activeTabId,
+    tabs: state.tabs.map((tab) => ({
+      id: tab.id,
+      title: tab.title,
+      modelId: tab.modelId,
+      sessionId: tab.sessionId,
+      messages: tab.messages.map((m) => ({
+        role: m.role,
+        content:
+          typeof m.content === "string" ? m.content : String(m.content || ""),
+        ...(m.label ? { label: m.label } : {}),
+      })),
+      createdAt: tab.createdAt,
+      updatedAt: tab.updatedAt,
+    })),
+  };
+  try {
+    await api.storage.local.set({ [CHAT_TABS_KEY]: payload });
+  } catch (error) {
+    // No-op.
+  }
+}
+
+let tabsSaveTimer = null;
+
+function scheduleTabsSave() {
+  if (tabsSaveTimer) clearTimeout(tabsSaveTimer);
+  tabsSaveTimer = setTimeout(() => {
+    tabsSaveTimer = null;
+    saveTabs();
+  }, 400);
+}
+
+function renderTabs() {
+  if (!dom.chatTabs) return;
+  dom.chatTabs.innerHTML = "";
+  // The strip element always stays in the layout (it is the flexible spacer
+  // that keeps the send button pinned to the right edge). Pills only appear
+  // once there is more than one conversation.
+  dom.chatTabs.hidden = false;
+
+  if (state.tabs.length < 2) return;
+
+  for (const tab of state.tabs) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      "chat-tab" + (tab.id === state.activeTabId ? " active" : "");
+    button.disabled = state.generating;
+    button.title = tabDisplayTitle(tab);
+
+    const kind = quickModelKindFromId(tab.modelId || "");
+    if (kind) button.appendChild(createModelIconElement(kind));
+
+    const label = document.createElement("span");
+    label.className = "chat-tab-title";
+    label.textContent = tabDisplayTitle(tab);
+    button.appendChild(label);
+
+    const close = document.createElement("span");
+    close.className = "chat-tab-close";
+    close.title = t("tab.close", "Close tab");
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", t("tab.close", "Close tab"));
+    close.innerHTML =
+      '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="M6 6l12 12"></path></svg>';
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeTab(tab.id);
+    });
+    button.appendChild(close);
+
+    button.addEventListener("click", () => {
+      activateTab(tab.id);
+    });
+
+    dom.chatTabs.appendChild(button);
+  }
+}
+
+async function applyActiveTab() {
+  const tab = getActiveTab();
+  if (tab && tab.modelId && tab.modelId !== currentQuickModelId()) {
+    await applyModelToConnection(tab.modelId, { silent: true });
+  }
+  renderChatFromState();
+  renderAttachmentList();
+  dom.messageInput.value = tab ? tab.draft || "" : "";
+  autoResizeInput();
+  updateSendButton();
+  renderTabs();
+  scrollChatToBottom(true);
+}
+
+function newTab() {
+  if (state.generating) {
+    appendSystemMessage("Wait for the current generation to finish first.");
+    return;
+  }
+  const current = getActiveTab();
+  const modelId =
+    current && current.modelId ? current.modelId : currentQuickModelId();
+  const tab = createTabObject(modelId);
+  state.tabs.push(tab);
+  state.activeTabId = tab.id;
+  applyActiveTab();
+  scheduleTabsSave();
+  dom.messageInput.focus();
+}
+
+function activateTab(id) {
+  if (id === state.activeTabId) return;
+  if (state.generating) {
+    setStatus("Wait for the current generation to finish.");
+    return;
+  }
+  if (!state.tabs.some((tab) => tab.id === id)) return;
+  state.activeTabId = id;
+  applyActiveTab();
+  scheduleTabsSave();
+  dom.messageInput.focus();
+}
+
+async function closeTab(id) {
+  if (state.generating) {
+    appendSystemMessage("Wait for the current generation to finish first.");
+    return;
+  }
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  if (index === -1) return;
+
+  const tab = state.tabs[index];
+  await saveTabSession(tab);
+  state.tabs.splice(index, 1);
+
+  if (!state.tabs.length) {
+    const fresh = createTabObject(tab.modelId || currentQuickModelId());
+    state.tabs.push(fresh);
+    state.activeTabId = fresh.id;
+  } else if (state.activeTabId === id) {
+    const next = state.tabs[Math.min(index, state.tabs.length - 1)];
+    state.activeTabId = next.id;
+  }
+
+  applyActiveTab();
+  scheduleTabsSave();
 }
 
 // ---------- Chat sessions ----------
@@ -3044,32 +3570,42 @@ async function saveChatSessions() {
   }
 }
 
-async function saveCurrentSession() {
-  if (!state.messages.length) return;
-  if (!state.currentSessionId) state.currentSessionId = createSessionId();
+async function saveTabSession(tab) {
+  if (!tab || !tab.messages.length) return;
+  if (!tab.sessionId) tab.sessionId = createSessionId();
 
-  const existing = state.sessions.find((s) => s.id === state.currentSessionId);
+  const existing = state.sessions.find((s) => s.id === tab.sessionId);
+  const title = existing ? existing.title : sessionTitleFromMessages(tab.messages);
   const session = {
-    id: state.currentSessionId,
-    title: existing ? existing.title : sessionTitleFromMessages(state.messages),
-    createdAt: existing ? existing.createdAt : Date.now(),
+    id: tab.sessionId,
+    title,
+    createdAt: existing ? existing.createdAt : tab.createdAt || Date.now(),
     updatedAt: Date.now(),
-    messages: state.messages.map((m) => ({
+    messages: tab.messages.map((m) => ({
       role: m.role,
       content: typeof m.content === "string" ? m.content : String(m.content || ""),
+      ...(m.label ? { label: m.label } : {}),
     })),
   };
 
+  tab.title = title;
+  tab.updatedAt = Date.now();
   state.sessions = [session].concat(
     state.sessions.filter((s) => s.id !== session.id)
   );
   await saveChatSessions();
 }
 
+async function saveCurrentSession() {
+  await saveTabSession(getActiveTab());
+}
+
 function renderChatFromState() {
   dom.chat.innerHTML = "";
   for (const item of state.messages) {
-    appendMessage(item.role, item.content);
+    // Stored messages use the API role "assistant"; the UI class is "ai".
+    const role = item.role === "assistant" ? "ai" : item.role;
+    appendMessage(role, item.content, { label: item.label });
   }
   scrollChatToBottom(true);
 }
@@ -3125,43 +3661,69 @@ function renderHistoryList() {
 async function deleteSession(sessionId) {
   state.sessions = state.sessions.filter((s) => s.id !== sessionId);
 
-  if (state.currentSessionId === sessionId) {
-    state.currentSessionId = createSessionId();
-    state.messages = [];
-    state.attachments = [];
-    dom.chat.innerHTML = "";
-    renderAttachmentList();
-    setStatus("Ready");
-    updateSendButton();
+  for (const tab of state.tabs) {
+    if (tab.sessionId !== sessionId) continue;
+    tab.sessionId = createSessionId();
+    if (tab.id === state.activeTabId) {
+      tab.messages = [];
+      tab.attachments = [];
+      tab.title = "";
+      dom.chat.innerHTML = "";
+      renderAttachmentList();
+      setStatus("Ready");
+      updateSendButton();
+    }
   }
 
   await saveChatSessions();
+  renderTabs();
+  scheduleTabsSave();
   renderHistoryList();
 }
 
 async function deleteAllSessions() {
   state.sessions = [];
-  state.currentSessionId = createSessionId();
-  state.messages = [];
-  state.attachments = [];
+
+  for (const tab of state.tabs) {
+    tab.sessionId = createSessionId();
+    tab.messages = [];
+    tab.attachments = [];
+    tab.title = "";
+  }
+
   dom.chat.innerHTML = "";
   renderAttachmentList();
   setStatus("Ready");
   updateSendButton();
   appendSystemMessage("All chat history deleted.");
+  renderTabs();
+  scheduleTabsSave();
 
   await saveChatSessions();
   renderHistoryList();
 }
 
+function toggleHistoryPanel() {
+  if (dom.historyPanel.hidden) {
+    showHistoryPanel();
+  } else {
+    hideHistoryPanel();
+  }
+}
+
 async function showHistoryPanel() {
+  // Flip the UI first so the button toggles immediately.
+  dom.historyPanel.hidden = false;
+  dom.historyBtn.classList.add("active");
+  dom.historyBtn.setAttribute("aria-expanded", "true");
   await saveCurrentSession();
   renderHistoryList();
-  dom.historyPanel.hidden = false;
 }
 
 function hideHistoryPanel() {
   dom.historyPanel.hidden = true;
+  dom.historyBtn.classList.remove("active");
+  dom.historyBtn.setAttribute("aria-expanded", "false");
 }
 
 function openSession(sessionId) {
@@ -3170,14 +3732,21 @@ function openSession(sessionId) {
 
   if (state.generating) stopGenerating();
 
-  state.currentSessionId = session.id;
-  state.messages = (session.messages || []).map((m) => ({ ...m }));
-  state.attachments = [];
+  const tab = getActiveTab();
+  if (tab) {
+    tab.sessionId = session.id;
+    tab.title = session.title || "";
+    tab.messages = (session.messages || []).map((m) => ({ ...m }));
+    tab.attachments = [];
+    tab.draft = "";
+  }
   renderAttachmentList();
   renderChatFromState();
   hideHistoryPanel();
   setStatus("Ready");
   updateSendButton();
+  renderTabs();
+  scheduleTabsSave();
 }
 
 // ---------- Quick model selection ----------
@@ -3383,6 +3952,11 @@ async function refreshUnifiedModelSelect() {
 
   const current = currentQuickModelId();
 
+  // Keep the active tab's remembered model in sync with the connection the
+  // user actually sees in the picker (settings changes included).
+  const activeTabForModel = getActiveTab();
+  if (activeTabForModel) activeTabForModel.modelId = current;
+
   dom.quickModelSelect.innerHTML = "";
   dom.quickModelMenu.innerHTML = "";
 
@@ -3584,20 +4158,23 @@ async function getQuickModelReadinessError(kind, key, model) {
   return "Unknown model source.";
 }
 
-async function switchQuickModel(value) {
-  if (!value) return;
+async function applyModelToConnection(value, options = {}) {
+  const silent = !!options.silent;
+  if (!value) return false;
   const [kind, key, ...modelParts] = value.split("::");
   const model = modelParts.join("::");
-  if (!key || !model) return;
+  if (!key || !model) return false;
 
   const modelLabel = displayModelName(model);
 
   try {
     const readinessError = await getQuickModelReadinessError(kind, key, model);
     if (readinessError) {
-      appendSystemMessage(`Cannot switch to ${modelLabel}: ${readinessError}`);
-      await refreshUnifiedModelSelect();
-      return;
+      if (!silent) {
+        appendSystemMessage(`Cannot switch to ${modelLabel}: ${readinessError}`);
+        await refreshUnifiedModelSelect();
+      }
+      return false;
     }
 
     if (kind === "server") {
@@ -3614,7 +4191,7 @@ async function switchQuickModel(value) {
       await setMode("server");
       dom.serverModel.value = model;
       await api.storage.local.set({ [`server_model_${key}`]: model });
-      setStatus(`Model: ${displayModelName(model)}`);
+      if (!silent) setStatus(`Model: ${displayModelName(model)}`);
     } else if (kind === "cloud") {
       state.mode = "cloud";
       dom.cloudProvider.value = key;
@@ -3640,14 +4217,29 @@ async function switchQuickModel(value) {
         cloud_provider: key,
         [`cloud_model_${key}`]: model,
       });
-      setStatus(`Model: ${displayModelName(model)}`);
+      if (!silent) setStatus(`Model: ${displayModelName(model)}`);
     }
 
     await refreshUnifiedModelSelect();
+    return true;
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
-    appendSystemMessage(`Failed to switch model: ${message}`);
-    await refreshUnifiedModelSelect();
+    if (!silent) {
+      appendSystemMessage(`Failed to switch model: ${message}`);
+      await refreshUnifiedModelSelect();
+    }
+    return false;
+  }
+}
+
+async function switchQuickModel(value) {
+  const ok = await applyModelToConnection(value, { silent: false });
+  if (!ok) return;
+  const tab = getActiveTab();
+  if (tab) {
+    tab.modelId = value;
+    scheduleTabsSave();
+    renderTabs();
   }
 }
 
@@ -3671,20 +4263,332 @@ function readFileAsText(file) {
   });
 }
 
+const TEXT_EXTENSIONS = new Set([
+  "txt", "text", "md", "markdown", "mdx", "json", "jsonl", "ndjson", "csv",
+  "tsv", "log", "rst", "tex", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue",
+  "svelte", "py", "rb", "php", "java", "kt", "kts", "scala", "c", "h", "cc",
+  "cpp", "cxx", "hpp", "hh", "cs", "go", "rs", "swift", "dart", "pl", "pm",
+  "lua", "r", "jl", "html", "htm", "xhtml", "css", "scss", "sass", "less",
+  "styl", "xml", "svg", "yaml", "yml", "toml", "ini", "cfg", "conf", "config",
+  "env", "properties", "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1", "sql",
+  "graphql", "gql", "proto", "diff", "patch", "srt", "vtt", "rtf", "gitignore",
+  "editorconfig",
+]);
+
+const TEXT_MIME_TYPES = new Set([
+  "application/json", "application/ld+json", "application/xml",
+  "application/xhtml+xml", "application/javascript", "application/x-javascript",
+  "application/ecmascript", "application/x-sh", "application/x-shellscript",
+  "application/x-yaml", "application/yaml", "application/toml", "application/sql",
+  "application/graphql", "application/x-ndjson", "application/x-httpd-php",
+  "application/rtf", "application/x-tex",
+]);
+
+// Restricts the OS file picker to formats the attachment pipeline understands.
+function applyFileInputAccept() {
+  if (!dom.fileInput) return;
+  const extensions = new Set([...TEXT_EXTENSIONS, ...ZIP_DOCUMENT_EXTENSIONS]);
+  dom.fileInput.accept = [
+    "image/*",
+    ...TEXT_MIME_TYPES,
+    ...[...extensions].sort().map((ext) => `.${ext}`),
+  ].join(",");
+}
+
+const PICKER_IMAGE_EXTENSIONS = [
+  "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif",
+  "heic", "heif", "tif", "tiff",
+];
+
+// File System Access API types. Unlike the <input accept> attribute, these
+// carry a label, so the native dialog shows proper filter names instead of the
+// browser's generic "Custom Files" filter name.
+function buildFilePickerTypes() {
+  const imageExtensions = new Set(PICKER_IMAGE_EXTENSIONS);
+  const textExtensions = [...new Set([...TEXT_EXTENSIONS, ...ZIP_DOCUMENT_EXTENSIONS])]
+    .filter((ext) => !imageExtensions.has(ext))
+    .map((ext) => `.${ext}`);
+  // Note: a "*/*" accept entry is dropped by Chromium (it maps to no
+  // extensions), so the all-files option comes from
+  // excludeAcceptAllOption: false in openAttachmentPicker().
+  return [
+    {
+      description: "Supported File Types",
+      accept: {
+        "image/*": PICKER_IMAGE_EXTENSIONS.map((ext) => `.${ext}`),
+        "text/plain": textExtensions,
+      },
+    },
+  ];
+}
+
+// Opens the native picker. Chromium exposes showOpenFilePicker(), whose custom
+// types give us a proper filter label; Firefox lacks it, so fall back to the
+// hidden <input accept> element.
+async function openAttachmentPicker() {
+  if (typeof window.showOpenFilePicker !== "function") {
+    dom.fileInput.click();
+    return;
+  }
+  let handles;
+  try {
+    handles = await window.showOpenFilePicker({
+      multiple: true,
+      // Keep the browser's "All Files" option available alongside our filter.
+      excludeAcceptAllOption: false,
+      types: buildFilePickerTypes(),
+    });
+  } catch (error) {
+    if (error && error.name === "AbortError") return;
+    dom.fileInput.click();
+    return;
+  }
+  const files = [];
+  for (const handle of handles) {
+    try {
+      files.push(await handle.getFile());
+    } catch (error) {
+      // Ignore handles the page can't read.
+    }
+  }
+  if (files.length) await handleSelectedFiles(files);
+}
+
 function isTextFile(file) {
-  const ext = (file.name.split(".").pop() || "").toLowerCase();
-  return (
-    file.type.startsWith("text/") ||
-    [
-      "txt", "md", "json", "csv", "log", "js", "ts", "py", "html",
-      "css", "xml", "yaml", "yml", "ini", "sh",
-    ].includes(ext)
+  const type = String(file.type || "").toLowerCase();
+  if (type.startsWith("text/")) return true;
+  if (TEXT_MIME_TYPES.has(type)) return true;
+  const name = String(file.name || "").toLowerCase();
+  const ext = name.includes(".") ? name.split(".").pop() : name;
+  return TEXT_EXTENSIONS.has(ext);
+}
+
+// Reads the first few KB so unknown files can be sniffed for text content.
+function readFileSample(file, maxBytes = 8192) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to read file."));
+    reader.readAsText(file.slice(0, maxBytes));
+  });
+}
+
+function looksLikeText(sample) {
+  if (!sample) return false;
+  if (sample.includes("\u0000")) return false;
+  const replacement = (sample.match(/\uFFFD/g) || []).length;
+  if (replacement > sample.length * 0.02) return false;
+  let control = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const code = sample.charCodeAt(i);
+    if (code < 9 || (code > 13 && code < 32)) control++;
+  }
+  return control <= sample.length * 0.05;
+}
+
+// ---------- Office / OpenDocument text extraction (ZIP-based, no deps) ----------
+
+const ZIP_DOCUMENT_EXTENSIONS = new Set([
+  "docx", "docm", "dotx", "xlsx", "xlsm", "xltx", "pptx", "pptm", "potx",
+  "odt", "ods", "odp", "odg",
+]);
+
+function isZipDocument(file) {
+  const name = String(file.name || "").toLowerCase();
+  const ext = name.includes(".") ? name.split(".").pop() : name;
+  return ZIP_DOCUMENT_EXTENSIONS.has(ext);
+}
+
+// Minimal ZIP reader: walks the central directory and inflates each entry.
+async function readZipEntries(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  let eocd = -1;
+  const limit = Math.max(0, bytes.length - 65557);
+  for (let i = bytes.length - 22; i >= limit; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return null;
+
+  const count = view.getUint16(eocd + 10, true);
+  let offset = view.getUint32(eocd + 16, true);
+  const entries = new Map();
+
+  for (let i = 0; i < count && offset + 46 <= bytes.length; i++) {
+    if (view.getUint32(offset, true) !== 0x02014b50) break;
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    const name = new TextDecoder().decode(
+      bytes.subarray(offset + 46, offset + 46 + nameLength)
+    );
+
+    if (localOffset + 30 <= bytes.length && view.getUint32(localOffset, true) === 0x04034b50) {
+      const localNameLength = view.getUint16(localOffset + 26, true);
+      const localExtraLength = view.getUint16(localOffset + 28, true);
+      const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+      entries.set(name, {
+        method,
+        data: bytes.subarray(dataStart, dataStart + compressedSize),
+      });
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+async function inflateZipEntry(entry) {
+  if (!entry) return null;
+  if (entry.method === 0) return entry.data;
+  if (entry.method === 8 && typeof DecompressionStream !== "undefined") {
+    try {
+      const stream = new Blob([entry.data])
+        .stream()
+        .pipeThrough(new DecompressionStream("deflate-raw"));
+      const buffer = await new Response(stream).arrayBuffer();
+      return new Uint8Array(buffer);
+    } catch (error) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function decodeXmlEntities(text) {
+  return String(text)
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16))
+    )
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function xmlToPlainText(xml) {
+  if (!xml) return "";
+  return decodeXmlEntities(
+    xml
+      .replace(/<(\/w:p|\/a:p|\/text:p|\/text:h|\/text:list-item)>/g, "\n")
+      .replace(/<w:tab\b[^>]*\/?>/g, "\t")
+      .replace(/<(w:br|a:br|text:line-break)\b[^>]*\/?>/g, "\n")
+      .replace(/<[^>]+>/g, "")
   );
 }
 
-async function handleSelectedFiles() {
-  const files = Array.from(dom.fileInput.files || []);
-  dom.fileInput.value = "";
+function extractSharedStrings(xml) {
+  const out = [];
+  if (!xml) return out;
+  const re = /<si\b[^>]*>([\s\S]*?)<\/si>/g;
+  let match;
+  while ((match = re.exec(xml))) {
+    const texts = match[1].match(/<t\b[^>]*>[\s\S]*?<\/t>/g) || [];
+    out.push(
+      texts.map((t) => decodeXmlEntities(t.replace(/<[^>]+>/g, ""))).join("")
+    );
+  }
+  return out;
+}
+
+function xlsxSheetToText(xml, sharedStrings) {
+  if (!xml) return "";
+  const lines = [];
+  const rowRe = /<row\b[^>]*>([\s\S]*?)<\/row>/g;
+  let row;
+  while ((row = rowRe.exec(xml))) {
+    const cells = [];
+    const cellRe = /<c\b([^>]*?)\/>|<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+    let cell;
+    while ((cell = cellRe.exec(row[1]))) {
+      const attrs = cell[1] || cell[2] || "";
+      const inner = cell[3] || "";
+      const type = (/t="([^"]+)"/.exec(attrs) || [])[1] || "";
+      const value = (/<v>([\s\S]*?)<\/v>/.exec(inner) || [])[1];
+      const inline = (/<t\b[^>]*>([\s\S]*?)<\/t>/.exec(inner) || [])[1];
+      let text = "";
+      if (type === "s" && value !== undefined) {
+        text = sharedStrings[parseInt(value, 10)] || "";
+      } else if (inline !== undefined) {
+        text = decodeXmlEntities(inline);
+      } else if (value !== undefined) {
+        text = decodeXmlEntities(value);
+      }
+      cells.push(text);
+    }
+    const line = cells.join("\t").replace(/\t+$/, "");
+    if (line.trim()) lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+async function extractDocumentText(file) {
+  const name = String(file.name || "").toLowerCase();
+  const ext = name.includes(".") ? name.split(".").pop() : name;
+  const buffer = await file.arrayBuffer();
+  const entries = await readZipEntries(buffer);
+  if (!entries || !entries.size) return "";
+
+  const readXml = async (entryName) => {
+    const entry = entries.get(entryName);
+    if (!entry) return "";
+    const bytes = await inflateZipEntry(entry);
+    return bytes ? new TextDecoder("utf-8").decode(bytes) : "";
+  };
+
+  const textParts = [];
+  const addXmlText = async (entryName) => {
+    const xml = await readXml(entryName);
+    if (xml) textParts.push(xmlToPlainText(xml));
+  };
+  if (["docx", "docm", "dotx"].includes(ext)) {
+    await addXmlText("word/document.xml");
+    for (const entryName of [...entries.keys()].sort()) {
+      if (/^word\/(header|footer)\d+\.xml$/.test(entryName)) {
+        await addXmlText(entryName);
+      }
+    }
+  } else if (["xlsx", "xlsm", "xltx"].includes(ext)) {
+    const sharedStrings = extractSharedStrings(await readXml("xl/sharedStrings.xml"));
+    for (const entryName of [...entries.keys()].sort()) {
+      if (/^xl\/worksheets\/sheet\d+\.xml$/.test(entryName)) {
+        const sheetText = xlsxSheetToText(await readXml(entryName), sharedStrings);
+        if (sheetText) textParts.push(sheetText);
+      }
+    }
+  } else if (["pptx", "pptm", "potx"].includes(ext)) {
+    for (const entryName of [...entries.keys()].sort()) {
+      if (/^ppt\/slides\/slide\d+\.xml$/.test(entryName)) {
+        await addXmlText(entryName);
+      }
+    }
+  } else if (["odt", "ods", "odp", "odg"].includes(ext)) {
+    await addXmlText("content.xml");
+  } else {
+    return "";
+  }
+
+  return textParts
+    .filter(Boolean)
+    .join("\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function handleSelectedFiles(pickedFiles) {
+  const fromPicker = Array.isArray(pickedFiles);
+  const files = fromPicker
+    ? pickedFiles
+    : Array.from(dom.fileInput.files || []);
+  if (!fromPicker) dom.fileInput.value = "";
 
   for (const file of files) {
     if (file.size > 8 * 1024 * 1024) {
@@ -3702,22 +4606,45 @@ async function handleSelectedFiles() {
           dataUrl,
           size: file.size,
         });
-      } else if (isTextFile(file)) {
-        const content = await readFileAsText(file);
-        if (content.length > 200000) {
-          appendSystemMessage(`"${file.name}" is too long. Maximum text length is 200 KB.`);
-          continue;
-        }
-        state.attachments.push({
-          id: createSessionId(),
-          name: file.name,
-          kind: "text",
-          content,
-          size: file.size,
-        });
-      } else {
-        appendSystemMessage(`Unsupported file type: ${file.name}`);
+        continue;
       }
+
+      let content = null;
+      if (isTextFile(file)) {
+        content = await readFileAsText(file);
+      } else if (isZipDocument(file)) {
+        content = await extractDocumentText(file);
+      } else {
+        const sample = await readFileSample(file);
+        if (looksLikeText(sample)) content = await readFileAsText(file);
+      }
+
+      if (content === null) {
+        appendSystemMessage(
+          `Unsupported file type: ${file.name}. Attach images, text/code files, or documents (DOCX, XLSX, PPTX, ODT, ODS, ODP).`
+        );
+        continue;
+      }
+
+      if (!content.trim()) {
+        appendSystemMessage(`Could not read any text from "${file.name}".`);
+        continue;
+      }
+
+      if (content.length > 200000) {
+        appendSystemMessage(
+          `"${file.name}" is too long. Maximum text length is 200 KB.`
+        );
+        continue;
+      }
+
+      state.attachments.push({
+        id: createSessionId(),
+        name: file.name,
+        kind: "text",
+        content,
+        size: file.size,
+      });
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       appendSystemMessage(`Failed to attach "${file.name}": ${message}`);

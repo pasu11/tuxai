@@ -388,6 +388,7 @@ async function runPopupToolRequest(toolId, text) {
 
   let config;
   let label = "";
+  let modelName = "";
 
   if (mode === "server") {
     const type = settings.penguin_server_type || "ollama";
@@ -423,6 +424,7 @@ async function runPopupToolRequest(toolId, text) {
             ? "llama.cpp"
             : "Other";
     label = `${backendLabel} · ${model}`;
+    modelName = model;
 
     if (type === "ollama") {
       config = {
@@ -466,6 +468,7 @@ async function runPopupToolRequest(toolId, text) {
 
     const providerName = await getCloudProviderLabel(provider);
     label = `${providerName} · ${model}`;
+    modelName = model;
     const kind = await getCloudProviderKind(provider);
 
     if (kind === "anthropic") {
@@ -614,7 +617,7 @@ async function runPopupToolRequest(toolId, text) {
       return { ok: false, error: "The model returned an empty response." };
     }
 
-    return { ok: true, text: resultText, label };
+    return { ok: true, text: resultText, label, model: modelName };
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
     return { ok: false, error: message };

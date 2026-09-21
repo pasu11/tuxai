@@ -200,11 +200,12 @@ API keys are stored only in the extension's local browser storage. Each provider
 
 - Type a message in the sidebar and press **Enter** (or click send). Use **Shift+Enter** for a new line.
 - The input box grows to show at least three lines.
-- Attach images or text files with the **attach** (paperclip) button.
+- Attach images, text/code files, or documents (DOCX, XLSX, PPTX, ODT, ODS, ODP) with the **attach** (paperclip) button. The file picker offers a **Supported File Types** filter plus the browser's **All Files** option so you can still pick anything; text is extracted in the browser before sending. Supported types are detected by MIME type, extension, or content for unknown text files.
 - Responses stream in; Markdown is rendered live, and reasoning output is shown in a collapsible box when the model provides it.
+- While a reply streams, the chat auto-scrolls until the top of the reply (model label included) is pinned at the top of the view. It then stops so you can read from the beginning; click the floating **↓** button to jump to the newest text and follow the rest of the stream. Scrolling up pauses auto-scroll.
 - Click the copy icon under any message to copy its full text.
 - Click the speaker icon under an assistant message to read it aloud (see [Text-to-speech](#7-text-to-speech)).
-- Use the **+** button to start a new chat, and the **history** button to reopen previous sessions. Chat sessions are saved in local browser storage.
+- Use the **+** button to start a new chat, and the **history** button to toggle the previous-sessions panel (click it again, press **Back**, or press **Esc** to return to the chat). Chat sessions are saved in local browser storage.
 
 ### 3. Send selected text to the sidebar
 
