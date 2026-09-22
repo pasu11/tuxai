@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TuxAI",
-  "version": "1.0.2",
+  "version": "1.2.1",
   "description": "An open-source AI sidebar that connects to your local LLM server or a cloud API and lets you run selected text through your tools.",
   "action": {
     "default_title": "TuxAI",
