@@ -50,6 +50,16 @@ function applyLanguage(pref) {
   if (dom.uiLanguage) dom.uiLanguage.value = value;
 }
 
+function renderAppVersion() {
+  if (!dom.appVersion) return;
+  try {
+    const version = api.runtime.getManifest().version;
+    if (version) dom.appVersion.textContent = `v ${version}`;
+  } catch (error) {
+    // No-op if the manifest is unavailable.
+  }
+}
+
 const SERVER_TYPES = new Set(["ollama", "koboldcpp", "llamacpp", "other"]);
 
 const SERVER_DEFAULTS = {
@@ -233,6 +243,7 @@ const dom = {
   chat: document.getElementById("chat"),
   scrollToBottomBtn: document.getElementById("scroll-to-bottom-btn"),
   chatStatus: document.getElementById("chat-status"),
+  appVersion: document.getElementById("app-version"),
   messageInput: document.getElementById("message-input"),
   sendBtn: document.getElementById("send-btn"),
   selectionPanel: document.getElementById("selection-panel"),
@@ -339,6 +350,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 async function init() {
+  renderAppVersion();
   applyTheme(localStorage.getItem("penguin_theme") || "light");
   dom.contextSize.value = localStorage.getItem("penguin_context_size") || "8192";
   const savedTextSize = parseInt(localStorage.getItem(TEXT_SIZE_KEY), 10);
