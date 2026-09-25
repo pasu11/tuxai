@@ -247,6 +247,7 @@ Settings → Tools
 ```
 
 - Create new tools with a name and system prompt.
+- Pick a **model** for each tool. By default a tool uses the model selected in the chat window; choose another fetched model to always use it for that tool (for example, translate with a different provider than you chat with).
 - Edit existing tools.
 - Delete tools.
 - Reset to the default tools:

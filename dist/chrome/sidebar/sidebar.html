@@ -13,12 +13,22 @@
           <img src="../icons/icon-128.png" alt="" width="34" height="34" />
         </div>
         <div class="brand-text">
-          <h1 data-i18n="app.title">Tux Ai Sidebar</h1>
+          <div class="brand-title">
+            <h1 data-i18n="app.title">Tux Ai Sidebar</h1>
+            <span id="app-version" class="app-version" aria-label="Version"></span>
+          </div>
           <span id="chat-status" class="chat-status" title="Ready" data-i18n="status.ready">Ready</span>
         </div>
       </div>
 
       <div class="header-actions">
+        <button id="lang-toggle" class="icon-button" type="button" title="Switch language" aria-label="Switch language" data-i18n-title="header.toggleLanguage" data-i18n-aria-label="header.toggleLanguage">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M2 12h20"></path>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+        </button>
         <button id="theme-toggle" class="icon-button" type="button" title="Toggle theme" aria-label="Toggle theme" data-i18n-title="header.toggleTheme" data-i18n-aria-label="header.toggleTheme">
           <svg id="theme-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="4"></circle>
@@ -85,9 +95,7 @@
             </div>
             <div id="cloud-model-manager" class="model-manager" aria-labelledby="cloud-models-label"></div>
             <select id="cloud-model-select" hidden></select>
-            <p class="hint" data-i18n="cloud.modelsHint">Fetched models are enabled by default. Disable any model you don't want in the model dropdown above the chat box. Custom models are kept when you Fetch again.</p>
           </div>
-          <p class="hint" data-i18n="cloud.keyHint">Your key is stored only in this extension's local browser storage.</p>
         </div>
       </div>
 
@@ -124,9 +132,7 @@
             <div id="server-model-manager" class="model-manager" aria-labelledby="server-models-label"></div>
             <input id="server-model" type="hidden" />
             <datalist id="server-model-list" hidden></datalist>
-            <p class="hint" data-i18n="cloud.modelsHint">Fetched models are enabled by default. Disable any model you don't want in the model dropdown above the chat box. Custom models are kept when you Fetch again.</p>
           </div>
-          <p class="hint" data-i18n="local.privacyHint">Requests go directly to the local server you configure. Nothing is sent to TuxAI servers.</p>
         </div>
       </div>
 
@@ -168,16 +174,6 @@
             </div>
             <p class="hint" data-i18n="ui.interfaceSizeHint">Scales the whole sidebar interface. Default: 100%.</p>
           </div>
-        </div>
-
-        <div class="settings-card">
-          <label class="settings-card-title" for="ui-language" data-i18n="ui.language">Language</label>
-          <select id="ui-language">
-            <option value="auto" data-i18n="ui.langAuto">Auto (follow browser)</option>
-            <option value="en" data-i18n="ui.langEn">English</option>
-            <option value="zh" data-i18n="ui.langZh">中文</option>
-          </select>
-          <p class="hint" data-i18n="ui.languageHint">Language of the sidebar and page popup.</p>
         </div>
 
         <div class="settings-card">
@@ -225,7 +221,6 @@
               <button id="tts-test-voice" type="button" class="button button-secondary" data-i18n="sound.test">Test</button>
             </div>
           </div>
-          <p class="hint" data-i18n="sound.hint">The TTS provider/model is independent of the chat model, so you can chat with DeepSeek and speak with OpenAI at the same time: pick <strong>OpenAI</strong> as the TTS provider (it reuses the OpenAI key stored in the Cloud Server tab), then set the TTS model to <code>gpt-4o-mini-tts</code>. Leave the provider as <em>Same as chat provider</em> to reuse the chat connection. The URL/key fields are optional overrides. Enter a TTS model and click <strong>Use</strong> to load its voices; if the model has no text-to-speech support, the Voice field shows <em>TTS not supported</em>. Use <strong>Test</strong> to preview the selected voice.</p>
         </div>
       </div>
 
@@ -243,6 +238,19 @@
           <div class="field">
             <label for="tool-name" data-i18n="tools.name">Name</label>
             <input id="tool-name" type="text" placeholder="Tool name" spellcheck="false" data-i18n-placeholder="tools.namePlaceholder" />
+          </div>
+          <div class="field">
+            <label data-i18n="tools.model">Model</label>
+            <div id="tool-model-picker" class="quick-model-picker tool-model-picker">
+              <button id="tool-model-trigger" type="button" class="quick-model-trigger" aria-haspopup="listbox" aria-expanded="false" data-i18n-title="composer.switchModel">
+                <span id="tool-model-label" class="quick-model-label"></span>
+                <svg class="quick-model-caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m6 9 6 6 6-6"></path>
+                </svg>
+              </button>
+              <div id="tool-model-menu" class="quick-model-menu tool-model-menu" role="listbox" aria-label="Models" hidden></div>
+            </div>
+            <p class="hint" data-i18n="tools.modelHint">Defaults to the model selected in the chat window. Pick another fetched model to always use it for this tool.</p>
           </div>
           <div class="field">
             <label for="tool-prompt" data-i18n="tools.systemPrompt">System prompt</label>
@@ -263,7 +271,6 @@
             <button id="backup-import-btn" type="button" class="button button-secondary" data-i18n="misc.import">Import settings backup</button>
           </div>
           <input id="backup-file-input" type="file" accept="application/json,.json" hidden />
-          <p class="hint" data-i18n="misc.hint">Export saves all settings, including API keys, models, and every tool (name and prompt). Chat history is not included. Import restores them and reloads the sidebar.</p>
         </div>
 
         <div class="settings-card">
@@ -273,7 +280,6 @@
             <button id="history-import-btn" type="button" class="button button-secondary" data-i18n="misc.historyImport">Import chat history</button>
           </div>
           <input id="history-file-input" type="file" accept="application/json,.json" hidden />
-          <p class="hint" data-i18n="misc.historyHint">Export saves every chat session and open tab. Import replaces the current chat history and reloads the sidebar.</p>
         </div>
       </div>
     </section>
