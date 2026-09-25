@@ -122,11 +122,27 @@ body {
   min-width: 0;
 }
 
+.brand-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
 .brand-text h1 {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.2px;
+  white-space: nowrap;
+}
+
+.brand-text .app-version {
+  display: inline;
+  margin-top: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 400;
   white-space: nowrap;
 }
 
@@ -1231,6 +1247,21 @@ body.settings-open .history-panel {
   color: var(--muted);
   font-size: 12px;
   text-align: center;
+}
+
+/* Per-tool model picker in Settings > Tools: same look as the composer
+   picker, but full width and opening downward. */
+.tool-model-picker {
+  width: 100%;
+  max-width: none;
+}
+
+.tool-model-menu {
+  top: calc(100% + 6px);
+  bottom: auto;
+  width: 100%;
+  max-width: 100%;
+  max-height: 260px;
 }
 
 .composer-spacer {

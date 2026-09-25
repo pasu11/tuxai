@@ -434,6 +434,51 @@ async function getSelectionText(tab, info) {
   }
 }
 
+// Resolves a tool's stored model reference ("server::<type>::<model>" or
+// "cloud::<provider>::<model>") into a concrete connection for the page
+// quick-popup path. The sidebar keeps its own copy of this logic.
+async function resolveToolModelRef(modelRef) {
+  const ref = String(modelRef || "").trim();
+  if (!ref) return null;
+
+  const [kind, key, ...modelParts] = ref.split("::");
+  const model = modelParts.join("::");
+  if (!kind || !key || !model) return null;
+
+  if (kind === "cloud") {
+    const defaults = await getCloudProviderDefaults(key);
+    const stored = await api.storage.local.get([
+      `cloud_api_url_${key}`,
+      `cloud_api_key_${key}`,
+    ]);
+    return {
+      mode: "cloud",
+      provider: key,
+      model,
+      baseUrl: String(stored[`cloud_api_url_${key}`] || defaults.url || "")
+        .trim()
+        .replace(/\/+$/, ""),
+      apiKey: String(stored[`cloud_api_key_${key}`] || "").trim(),
+    };
+  }
+
+  if (kind === "server") {
+    const defaults = SERVER_DEFAULTS[key];
+    if (!defaults) return null;
+    const stored = await api.storage.local.get([`server_url_${key}`]);
+    return {
+      mode: "server",
+      serverType: key,
+      model,
+      baseUrl: String(stored[`server_url_${key}`] || defaults.url || "")
+        .trim()
+        .replace(/\/+$/, ""),
+    };
+  }
+
+  return null;
+}
+
 async function runPopupToolRequest(toolId, text) {
   const tools = await getEffectiveTools();
   const tool = tools.find((item) => item.id === toolId);
@@ -447,7 +492,8 @@ async function runPopupToolRequest(toolId, text) {
     "cloud_provider",
   ]);
 
-  const mode = settings.penguin_mode || "server";
+  const override = await resolveToolModelRef(tool.modelRef);
+  const mode = override ? override.mode : settings.penguin_mode || "server";
   const messages = [
     { role: "system", content: tool.prompt },
     { role: "user", content: text },
@@ -458,7 +504,9 @@ async function runPopupToolRequest(toolId, text) {
   let modelName = "";
 
   if (mode === "server") {
-    const type = settings.penguin_server_type || "ollama";
+    const type = override
+      ? override.serverType
+      : settings.penguin_server_type || "ollama";
     const defaults = SERVER_DEFAULTS[type];
     if (!defaults) {
       return { ok: false, error: `Unknown local backend: ${type}` };
@@ -467,9 +515,11 @@ async function runPopupToolRequest(toolId, text) {
     const keys = [`server_url_${type}`, `server_model_${type}`];
     const stored = await api.storage.local.get(keys);
     const baseUrl = (
-      stored[keys[0]] || defaults.url
+      override ? override.baseUrl : stored[keys[0]] || defaults.url
     ).trim().replace(/\/+$/, "");
-    const storedModel = stored[keys[1]] || defaults.model;
+    const storedModel = override
+      ? override.model
+      : stored[keys[1]] || defaults.model;
     const model =
       type === "ollama"
         ? storedModel
@@ -509,7 +559,9 @@ async function runPopupToolRequest(toolId, text) {
       };
     }
   } else {
-    const provider = settings.cloud_provider || "deepseek";
+    const provider = override
+      ? override.provider
+      : settings.cloud_provider || "deepseek";
     const defaults = await getCloudProviderDefaults(provider);
     const keys = [
       `cloud_api_url_${provider}`,
@@ -518,10 +570,14 @@ async function runPopupToolRequest(toolId, text) {
     ];
     const stored = await api.storage.local.get(keys);
     const baseUrl = (
-      stored[keys[0]] || defaults.url
+      override ? override.baseUrl : stored[keys[0]] || defaults.url
     ).trim().replace(/\/+$/, "");
-    const apiKey = String(stored[keys[1]] || "").trim();
-    const model = stored[keys[2]] || defaults.model;
+    const apiKey = override
+      ? override.apiKey
+      : String(stored[keys[1]] || "").trim();
+    const model = override
+      ? override.model
+      : stored[keys[2]] || defaults.model;
 
     if (!baseUrl) {
       return { ok: false, error: "Cloud API URL is not set." };

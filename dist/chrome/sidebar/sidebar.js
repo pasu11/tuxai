@@ -50,6 +50,16 @@ function applyLanguage(pref) {
   if (dom.uiLanguage) dom.uiLanguage.value = value;
 }
 
+function renderAppVersion() {
+  if (!dom.appVersion) return;
+  try {
+    const version = api.runtime.getManifest().version;
+    if (version) dom.appVersion.textContent = `v ${version}`;
+  } catch (error) {
+    // No-op if the manifest is unavailable.
+  }
+}
+
 const SERVER_TYPES = new Set(["ollama", "koboldcpp", "llamacpp", "other"]);
 
 const SERVER_DEFAULTS = {
@@ -222,17 +232,23 @@ const dom = {
   interfaceScale: document.getElementById("interface-scale"),
   resetInterfaceScale: document.getElementById("reset-interface-scale"),
   quickShortcut: document.getElementById("quick-shortcut"),
+  langToggle: document.getElementById("lang-toggle"),
   uiLanguage: document.getElementById("ui-language"),
   newTool: document.getElementById("new-tool"),
   resetTools: document.getElementById("reset-tools"),
   manageTool: document.getElementById("manage-tool"),
   toolName: document.getElementById("tool-name"),
+  toolModelPicker: document.getElementById("tool-model-picker"),
+  toolModelTrigger: document.getElementById("tool-model-trigger"),
+  toolModelLabel: document.getElementById("tool-model-label"),
+  toolModelMenu: document.getElementById("tool-model-menu"),
   toolPrompt: document.getElementById("tool-prompt"),
   saveTool: document.getElementById("save-tool"),
   deleteTool: document.getElementById("delete-tool"),
   chat: document.getElementById("chat"),
   scrollToBottomBtn: document.getElementById("scroll-to-bottom-btn"),
   chatStatus: document.getElementById("chat-status"),
+  appVersion: document.getElementById("app-version"),
   messageInput: document.getElementById("message-input"),
   sendBtn: document.getElementById("send-btn"),
   selectionPanel: document.getElementById("selection-panel"),
@@ -262,8 +278,10 @@ const state = {
   serverType: localStorage.getItem("penguin_server_type") || "ollama",
   customCloudProviders: [],
   cloudStore: {},
+  modelOptions: [],
   toolState: { customTools: [], overrides: {}, deleted: [] },
   editingToolId: null,
+  editingToolModelRef: "",
   selectedText: "",
   // Multiple concurrent conversations. The active tab is projected onto
   // `state.messages` / `state.attachments` / `state.currentSessionId` below so
@@ -317,8 +335,11 @@ Object.defineProperty(state, "currentSessionId", {
 let uiReady = false;
 let cloudFetchTimer = null;
 // Auto-scroll behavior while a reply streams:
-//   "top"    - follow new text until the reply's top edge (label included) is
-//              pinned near the top of the viewport, then stop (default)
+//   "top"    - follow new text until the pinned element's top edge is near the
+//              top of the viewport, then stop (default). The pinned element is
+//              the final answer bubble once it has text; while only reasoning
+//              streams, the newest reasoning text is followed instead so the
+//              stop does not happen on the reasoning bubble.
 //   "bottom" - keep the newest text visible (after the ↓ button is clicked)
 //   "off"    - no automatic scrolling (after the user scrolls away)
 const STREAM_TOP_MARGIN = 8;
@@ -339,6 +360,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 async function init() {
+  renderAppVersion();
   applyTheme(localStorage.getItem("penguin_theme") || "light");
   dom.contextSize.value = localStorage.getItem("penguin_context_size") || "8192";
   const savedTextSize = parseInt(localStorage.getItem(TEXT_SIZE_KEY), 10);
@@ -624,12 +646,15 @@ function bindEvents() {
     api.storage.local.set({ [QUICK_SHORTCUT_KEY]: dom.quickShortcut.value });
   });
 
-  dom.uiLanguage.addEventListener("change", () => {
-    applyLanguage(dom.uiLanguage.value);
-    if (typeof renderTools === "function") renderTools();
-    renderTtsProviderOptions();
-    applyTtsModel({ persist: false });
-  });
+  if (dom.langToggle) {
+    dom.langToggle.addEventListener("click", () => {
+      const next = uiLang === "zh" ? "en" : "zh";
+      applyLanguage(next);
+      if (typeof renderTools === "function") renderTools();
+      renderTtsProviderOptions();
+      applyTtsModel({ persist: false });
+    });
+  }
 
   dom.manageTool.addEventListener("change", () => {
     state.editingToolId = dom.manageTool.value;
@@ -640,6 +665,10 @@ function bindEvents() {
   dom.saveTool.addEventListener("click", saveTool);
   dom.deleteTool.addEventListener("click", deleteTool);
   dom.resetTools.addEventListener("click", resetTools);
+  dom.toolModelTrigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleToolModelMenu();
+  });
   dom.newChatBtn.addEventListener("click", clearChat);
   if (dom.newTabBtn) dom.newTabBtn.addEventListener("click", newTab);
   dom.clearSelection.addEventListener("click", clearSelectedText);
@@ -654,10 +683,17 @@ function bindEvents() {
   });
   document.addEventListener("click", (event) => {
     if (!dom.quickModelPicker.contains(event.target)) closeQuickModelMenu();
+    if (
+      dom.toolModelPicker &&
+      !dom.toolModelPicker.contains(event.target)
+    ) {
+      closeToolModelMenu();
+    }
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     closeQuickModelMenu();
+    closeToolModelMenu();
     if (!dom.historyPanel.hidden) hideHistoryPanel();
   });
 
@@ -1042,6 +1078,7 @@ function bindSettingsTabs() {
         // data-collection consent (already granted -> no prompt).
         requestDataConsent().catch(() => {});
       } else if (tab === "local") setMode("server");
+      else if (tab === "tools") refreshToolModelSelect();
     });
   });
 }
@@ -2075,6 +2112,144 @@ function effectiveTools() {
   return effectiveToolsFromState(state.toolState);
 }
 
+// ---------- Per-tool model picker ----------
+// Mirrors the composer's model picker. An empty modelRef means "same as
+// chat": the tool follows the model currently selected above the chat box.
+
+function toolModelSameAsChatLabel() {
+  const current = currentQuickModelId();
+  const label = current ? toolModelRefLabel(current) : "";
+  const base = t("tools.sameAsChatModel", "Same as chat");
+  return label ? `${base} · ${label}` : base;
+}
+
+function toolModelRefLabel(ref) {
+  const found = (state.modelOptions || []).find((item) => item.id === ref);
+  if (found) return cleanModelLabel(found.label);
+  const parts = String(ref || "").split("::");
+  const model = parts.slice(2).join("::");
+  return displayModelName(model) || ref;
+}
+
+function updateToolModelTrigger() {
+  if (!dom.toolModelLabel || !dom.toolModelTrigger) return;
+  const ref = state.editingToolModelRef || "";
+  const effective = ref || currentQuickModelId() || "";
+  const label = ref ? toolModelRefLabel(ref) : toolModelSameAsChatLabel();
+
+  dom.toolModelLabel.textContent = "";
+  const kind = quickModelKindFromId(effective);
+  if (kind) dom.toolModelLabel.appendChild(createModelIconElement(kind));
+  const text = document.createElement("span");
+  text.textContent = label || t("composer.noModel", "No model selected");
+  dom.toolModelLabel.appendChild(text);
+  dom.toolModelTrigger.title =
+    label || t("composer.switchModel", "Switch model");
+}
+
+function renderToolModelMenu() {
+  if (!dom.toolModelMenu) return;
+  dom.toolModelMenu.innerHTML = "";
+
+  const selectedRef = state.editingToolModelRef || "";
+
+  const sameButton = document.createElement("button");
+  sameButton.type = "button";
+  sameButton.className = "quick-model-option" + (selectedRef ? "" : " active");
+  sameButton.setAttribute("role", "option");
+  sameButton.setAttribute("aria-selected", String(!selectedRef));
+  const sameText = document.createElement("span");
+  sameText.textContent = toolModelSameAsChatLabel();
+  sameButton.appendChild(sameText);
+  sameButton.addEventListener("click", () => selectToolModelOption(""));
+  dom.toolModelMenu.appendChild(sameButton);
+
+  let currentGroup = null;
+  const options = state.modelOptions || [];
+  for (const item of options) {
+    if (item.group !== currentGroup) {
+      const title = document.createElement("div");
+      title.className = "quick-model-group-title";
+      title.textContent = item.group;
+      dom.toolModelMenu.appendChild(title);
+      currentGroup = item.group;
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      "quick-model-option" + (item.id === selectedRef ? " active" : "");
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(item.id === selectedRef));
+
+    const kind = quickModelKindFromId(item.id);
+    if (kind) button.appendChild(createModelIconElement(kind));
+
+    const text = document.createElement("span");
+    text.textContent = cleanModelLabel(item.label);
+    button.appendChild(text);
+
+    button.addEventListener("click", () => selectToolModelOption(item.id));
+    dom.toolModelMenu.appendChild(button);
+  }
+
+  // Keep a previously chosen model visible even if it is no longer in the
+  // fetched list, so the user can see and change it.
+  if (selectedRef && !options.some((item) => item.id === selectedRef)) {
+    const title = document.createElement("div");
+    title.className = "quick-model-group-title";
+    title.textContent = t("tools.modelUnavailable", "Unavailable");
+    dom.toolModelMenu.appendChild(title);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quick-model-option active";
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", "true");
+    const text = document.createElement("span");
+    text.textContent = toolModelRefLabel(selectedRef);
+    button.appendChild(text);
+    button.addEventListener("click", () => selectToolModelOption(selectedRef));
+    dom.toolModelMenu.appendChild(button);
+  }
+}
+
+function selectToolModelOption(value) {
+  state.editingToolModelRef = value || "";
+  closeToolModelMenu();
+  updateToolModelTrigger();
+  renderToolModelMenu();
+}
+
+function toggleToolModelMenu() {
+  if (!dom.toolModelMenu) return;
+  if (dom.toolModelMenu.hidden) openToolModelMenu();
+  else closeToolModelMenu();
+}
+
+function openToolModelMenu() {
+  if (!dom.toolModelMenu) return;
+  dom.toolModelMenu.hidden = false;
+  dom.toolModelTrigger.setAttribute("aria-expanded", "true");
+}
+
+function closeToolModelMenu() {
+  if (!dom.toolModelMenu) return;
+  dom.toolModelMenu.hidden = true;
+  dom.toolModelTrigger.setAttribute("aria-expanded", "false");
+}
+
+async function refreshToolModelSelect() {
+  if (!dom.toolModelMenu) return;
+  try {
+    state.modelOptions = await collectModelOptions();
+  } catch (error) {
+    // Keep the previously collected options on failure.
+  }
+  renderToolModelMenu();
+  updateToolModelTrigger();
+}
+
 function renderTools() {
   const tools = effectiveTools();
 
@@ -2106,6 +2281,7 @@ function renderManageFields() {
   if (tool) {
     dom.toolName.value = tool.name;
     dom.toolPrompt.value = tool.prompt;
+    state.editingToolModelRef = tool.modelRef || "";
     dom.toolName.disabled = false;
     dom.toolPrompt.disabled = false;
     dom.saveTool.disabled = false;
@@ -2113,21 +2289,28 @@ function renderManageFields() {
   } else {
     dom.toolName.value = "";
     dom.toolPrompt.value = "";
+    state.editingToolModelRef = "";
     dom.toolName.disabled = false;
     dom.toolPrompt.disabled = false;
     dom.saveTool.disabled = false;
     dom.deleteTool.disabled = true;
   }
+
+  updateToolModelTrigger();
+  renderToolModelMenu();
 }
 
 function startNewTool() {
   state.editingToolId = "custom_" + Date.now();
+  state.editingToolModelRef = "";
   dom.toolName.value = "New Tool";
   dom.toolPrompt.value = "";
   dom.toolName.disabled = false;
   dom.toolPrompt.disabled = false;
   dom.saveTool.disabled = false;
   dom.deleteTool.disabled = true;
+  updateToolModelTrigger();
+  renderToolModelMenu();
 }
 
 async function saveTool() {
@@ -2138,7 +2321,12 @@ async function saveTool() {
     return;
   }
 
-  const tool = { id: state.editingToolId, name, prompt };
+  const tool = {
+    id: state.editingToolId,
+    name,
+    prompt,
+    modelRef: state.editingToolModelRef || "",
+  };
 
   if (isBuiltInTool(state.editingToolId)) {
     state.toolState.overrides[state.editingToolId] = tool;
@@ -2443,8 +2631,13 @@ function scrollChatToBottom(force = false) {
 }
 
 // Keeps a streaming reply visible. In "top" mode it scrolls only until the
-// reply's top edge (label included) is pinned near the top of the viewport;
-// in "bottom" mode it keeps chasing the newest text.
+// pinned element's top edge is near the top of the viewport; in "bottom" mode
+// it keeps chasing the newest text.
+//
+// The pin-and-stop behavior is reserved for the final answer bubble: while the
+// model is still thinking (reasoning box visible, no answer text yet), the
+// newest reasoning text is followed like in "bottom" mode so auto-scrolling
+// does not stop on the reasoning bubble.
 function scrollStreamingMessageIntoView(messageEl) {
   if (
     dom.chat &&
@@ -2452,19 +2645,29 @@ function scrollStreamingMessageIntoView(messageEl) {
     messageEl.isConnected &&
     autoScrollMode !== "off"
   ) {
-    const maxScroll = dom.chat.scrollHeight - dom.chat.clientHeight;
-    let target = maxScroll;
+    const answerBubble = messageEl._answerBubble;
+    const answerActive = Boolean(answerBubble) && !answerBubble.hidden;
+    const reasoningActive =
+      Boolean(messageEl._reasoningBox) && !messageEl._reasoningBox.hidden;
 
-    if (autoScrollMode === "top") {
-      const chatRect = dom.chat.getBoundingClientRect();
-      const messageRect = messageEl.getBoundingClientRect();
-      const messageTop = messageRect.top - chatRect.top + dom.chat.scrollTop;
-      target = Math.max(0, Math.min(maxScroll, messageTop - STREAM_TOP_MARGIN));
-    }
+    if (autoScrollMode === "top" && reasoningActive && !answerActive) {
+      dom.chat.scrollTo({ top: dom.chat.scrollHeight, behavior: "instant" });
+    } else {
+      const maxScroll = dom.chat.scrollHeight - dom.chat.clientHeight;
+      let target = maxScroll;
 
-    // Never scroll up: the user may have moved ahead of the pinned position.
-    if (target > dom.chat.scrollTop + 1) {
-      dom.chat.scrollTo({ top: target, behavior: "instant" });
+      if (autoScrollMode === "top") {
+        const anchor = answerActive ? answerBubble : messageEl;
+        const chatRect = dom.chat.getBoundingClientRect();
+        const anchorRect = anchor.getBoundingClientRect();
+        const anchorTop = anchorRect.top - chatRect.top + dom.chat.scrollTop;
+        target = Math.max(0, Math.min(maxScroll, anchorTop - STREAM_TOP_MARGIN));
+      }
+
+      // Never scroll up: the user may have moved ahead of the pinned position.
+      if (target > dom.chat.scrollTop + 1) {
+        dom.chat.scrollTo({ top: target, behavior: "instant" });
+      }
     }
   }
   updateScrollToBottomButton();
@@ -3098,6 +3301,7 @@ async function runToolRequest({ tool, userText, clearComposer }) {
     labelName: tool.name,
     selectedContext: "",
     collapseUserText: true,
+    modelRef: tool.modelRef || "",
   });
 }
 
@@ -3108,15 +3312,28 @@ async function runStreamedChat({
   labelName,
   selectedContext,
   collapseUserText = false,
+  modelRef = "",
 }) {
-  const configError = validateConnection();
+  let override = null;
+  if (modelRef) {
+    override = await resolveToolConnection(modelRef);
+    if (!override) {
+      appendSystemMessage(
+        "The model selected for this tool is no longer available. Pick another model in Settings > Tools."
+      );
+      return;
+    }
+  }
+
+  const configError = validateConnection(override);
   if (configError) {
     appendSystemMessage(configError);
     return;
   }
 
-  if (state.mode === "cloud") {
-    const config = buildRequestConfig([]);
+  const effectiveMode = override ? override.mode : state.mode;
+  if (effectiveMode === "cloud") {
+    const config = buildRequestConfig([], override);
     if (!(await ensureDataConsent(config.url))) return;
   }
 
@@ -3153,7 +3370,7 @@ async function runStreamedChat({
   clearSelectedText();
 
   const assistantEl = appendMessage("ai", "");
-  const modelLabel = getModelLabel();
+  const modelLabel = override ? displayModelName(override.model) : getModelLabel();
   const messageLabel =
     [labelName, modelLabel].filter(Boolean).join(" · ") ||
     t("role.assistant", "Assistant");
@@ -3195,6 +3412,7 @@ async function runStreamedChat({
     await streamCompletion({
       messages: requestMessages,
       signal: controller.signal,
+      override,
       onDelta: (delta) => {
         fullText += delta;
         assistantEl._rawText = fullText;
@@ -3261,7 +3479,83 @@ function stopGenerating() {
   if (state.abortController) state.abortController.abort();
 }
 
-function validateConnection() {
+// Resolves a tool's stored model reference ("server::<type>::<model>" or
+// "cloud::<provider>::<model>") into a concrete connection. Returns null for
+// an empty or invalid reference.
+async function resolveToolConnection(modelRef) {
+  const ref = String(modelRef || "").trim();
+  if (!ref) return null;
+
+  const [kind, key, ...modelParts] = ref.split("::");
+  const model = modelParts.join("::");
+  if (!kind || !key || !model) return null;
+
+  if (kind === "cloud") {
+    if (
+      !isBuiltInCloudProvider(key) &&
+      !(state.customCloudProviders || []).some((item) => item.id === key)
+    ) {
+      state.customCloudProviders = await getCustomCloudProviders();
+    }
+    const defaults = cloudProviderDefaults(key);
+    const stored = await api.storage.local.get([
+      `cloud_api_url_${key}`,
+      `cloud_api_key_${key}`,
+    ]);
+    return {
+      mode: "cloud",
+      provider: key,
+      model,
+      baseUrl: String(stored[`cloud_api_url_${key}`] || defaults.url || "")
+        .trim()
+        .replace(/\/+$/, ""),
+      apiKey: String(stored[`cloud_api_key_${key}`] || "").trim(),
+    };
+  }
+
+  if (kind === "server") {
+    const defaults = SERVER_DEFAULTS[key];
+    if (!defaults) return null;
+    const stored = await api.storage.local.get([`server_url_${key}`]);
+    return {
+      mode: "server",
+      serverType: key,
+      model,
+      baseUrl: String(stored[`server_url_${key}`] || defaults.url || "")
+        .trim()
+        .replace(/\/+$/, ""),
+    };
+  }
+
+  return null;
+}
+
+function validateConnection(override) {
+  if (override) {
+    if (override.mode === "cloud") {
+      if (!override.baseUrl) {
+        return `Cloud API URL is missing for ${cloudProviderLabel(
+          override.provider
+        )}. Open settings and enter it.`;
+      }
+      if (!override.apiKey) {
+        return `Cloud API key is missing for ${cloudProviderLabel(
+          override.provider
+        )}. Open settings and paste your key.`;
+      }
+      return "";
+    }
+    if (!override.baseUrl) {
+      return `${serverTypeLabel(
+        override.serverType
+      )} endpoint URL is missing. Open settings and enter it.`;
+    }
+    if (override.serverType === "ollama" && !override.model) {
+      return "Model name is required for Ollama endpoints.";
+    }
+    return "";
+  }
+
   if (state.mode === "server") {
     const url = dom.serverUrl.value.trim();
     if (!url) return "Server endpoint URL is missing. Open settings and enter it.";
@@ -3829,7 +4123,10 @@ async function processRestoredActiveModel() {
   }
 }
 
-async function refreshUnifiedModelSelect() {
+// Collects every fetched/custom model that is currently usable, in the same
+// "server::<type>::<model>" / "cloud::<provider>::<model>" form used by the
+// composer picker and by per-tool model overrides.
+async function collectModelOptions() {
   const options = [];
   const seen = new Set();
 
@@ -3886,8 +4183,6 @@ async function refreshUnifiedModelSelect() {
   }
 
   state.customCloudProviders = await getCustomCloudProviders();
-  renderTtsProviderOptions();
-  applyTtsModel({ persist: false });
   const cloudProviders = [
     ...BUILT_IN_CLOUD_PROVIDERS,
     ...(state.customCloudProviders || []).map((item) => item.id),
@@ -3932,10 +4227,7 @@ async function refreshUnifiedModelSelect() {
 
     // DeepSeek always exposes deepseek-chat once DeepSeek is connected,
     // even if the server model list has not been fetched yet.
-    if (
-      provider === "deepseek" &&
-      !fetchedModels.includes("deepseek-chat")
-    ) {
+    if (provider === "deepseek" && !fetchedModels.includes("deepseek-chat")) {
       fetchedModels.unshift("deepseek-chat");
     }
     const modelList = uniqueModels([...fetchedModels, ...customModels]);
@@ -3949,6 +4241,15 @@ async function refreshUnifiedModelSelect() {
       );
     }
   }
+
+  return options;
+}
+
+async function refreshUnifiedModelSelect() {
+  const options = await collectModelOptions();
+  renderTtsProviderOptions();
+  applyTtsModel({ persist: false });
+  state.modelOptions = options;
 
   const current = currentQuickModelId();
 
@@ -3971,6 +4272,8 @@ async function refreshUnifiedModelSelect() {
     empty.textContent = t("composer.noModel", "No model selected");
     dom.quickModelMenu.appendChild(empty);
     updateQuickModelTrigger();
+    renderToolModelMenu();
+    updateToolModelTrigger();
     return;
   }
 
@@ -4001,6 +4304,8 @@ async function refreshUnifiedModelSelect() {
 
   updateQuickModelTrigger();
   renderQuickModelMenu(options, current);
+  renderToolModelMenu();
+  updateToolModelTrigger();
 }
 
 function quickModelKindFromId(id) {
@@ -4774,8 +5079,8 @@ function trimHistoryToFit(newMessageTokens, contextSize) {
 
 // ---------- Streaming ----------
 
-async function streamCompletion({ messages, signal, onDelta, onReasoning }) {
-  const config = buildRequestConfig(messages);
+async function streamCompletion({ messages, signal, onDelta, onReasoning, override }) {
+  const config = buildRequestConfig(messages, override);
   const response = await fetch(config.url, {
     method: "POST",
     headers: config.headers,
@@ -4791,18 +5096,19 @@ async function streamCompletion({ messages, signal, onDelta, onReasoning }) {
   await consumeStream(response, config.streamKind, onDelta, onReasoning);
 }
 
-function buildRequestConfig(messages) {
+function buildRequestConfig(messages, override) {
   const bodyMessages = Array.isArray(messages) ? messages : [];
+  const useCloud = override ? override.mode === "cloud" : state.mode === "cloud";
 
-  if (state.mode === "cloud") {
-    const provider = dom.cloudProvider.value;
+  if (useCloud) {
+    const provider = override ? override.provider : dom.cloudProvider.value;
     const endpoint = cloudProviderDefaults(provider);
     const kind = cloudProviderKind(provider);
-    const baseUrl = (
-      dom.cloudApiUrl.value.trim() || endpoint.url
+    const baseUrl = String(
+      override ? override.baseUrl : dom.cloudApiUrl.value.trim() || endpoint.url
     ).replace(/\/+$/, "");
-    const model = getCloudModelValue() || endpoint.model;
-    const apiKey = dom.cloudApiKey.value.trim();
+    const model = override ? override.model : getCloudModelValue() || endpoint.model;
+    const apiKey = override ? override.apiKey : dom.cloudApiKey.value.trim();
 
     if (kind === "anthropic") {
       const system = bodyMessages
@@ -4909,9 +5215,12 @@ function buildRequestConfig(messages) {
     };
   }
 
-  const type = dom.serverType.value;
-  const baseUrl = dom.serverUrl.value.trim().replace(/\/$/, "");
-  const model = dom.serverModel.value.trim() || "local-model";
+  const type = override ? override.serverType : dom.serverType.value;
+  const baseUrl = String(
+    override ? override.baseUrl : dom.serverUrl.value.trim()
+  ).replace(/\/+$/, "");
+  const model =
+    (override ? override.model : dom.serverModel.value.trim()) || "local-model";
 
   if (type === "ollama") {
     return {

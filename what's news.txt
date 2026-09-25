@@ -1,6 +1,6 @@
-1.0.1
 
-1.0.2
+
+1.2.0
 -add pin to popup
 -add tab session
 -text bubble colors
@@ -11,3 +11,11 @@
 -upload fix
 
 
+1.2.1
+-auto scroll fix
+
+1.2.2
+-seperate models for each tool
+-translate interface icon
+
+1.2.3
