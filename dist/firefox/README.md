@@ -18,6 +18,8 @@ It provides:
 - Bilingual UI (English / 中文)
 - Light/dark theme, adjustable text size, interface scale, and context size
 
+![TuxAI sidebar: chat with selected text and tool buttons, cloud and local server settings, per-tool models, text-to-speech, UI and backup settings, and the quick-select popup on a page](screenshots/01.jpg)
+
 ## Requirements
 
 - Chrome, Chromium, Vivaldi, Edge, or another Chromium browser
