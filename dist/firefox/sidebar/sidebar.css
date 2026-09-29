@@ -20,6 +20,8 @@
   --ai-bubble: #fffed9;
   --code-bg: #0f172a;
   --code-text: #e2e8f0;
+  --settings-card-a: #fffed9;
+  --settings-card-b: #e2ecee;
 }
 
 [data-theme="dark"] {
@@ -43,6 +45,8 @@
   --ai-bubble: #16233a;
   --code-bg: #0a0f1c;
   --code-text: #dbeafe;
+  --settings-card-a: #101a2b;
+  --settings-card-b: #16233a;
 }
 
 * {
@@ -318,14 +322,23 @@ body.settings-open .history-panel {
   flex-direction: column;
   gap: 6px;
   padding: 12px;
-  background: var(--surface);
+  background: var(--settings-card-a);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
 
 .settings-card:nth-child(even) {
-  background: var(--surface);
+  background: var(--settings-card-b);
+}
+
+/* Cloud/Local pages use .settings-box instead of .settings-card. */
+.settings-page > .settings-box:nth-child(odd) {
+  background: var(--settings-card-a);
+}
+
+.settings-page > .settings-box:nth-child(even) {
+  background: var(--settings-card-b);
 }
 
 .settings-divider {
@@ -335,9 +348,12 @@ body.settings-open .history-panel {
   flex-shrink: 0;
 }
 
-.settings-card.settings-card-plain,
+.settings-card.settings-card-plain {
+  background: var(--settings-card-a);
+}
+
 .settings-card-plain:nth-child(even) {
-  background: var(--surface);
+  background: var(--settings-card-b);
 }
 
 .settings-card-title {
@@ -458,6 +474,7 @@ body.settings-open .history-panel {
 }
 
 .field label,
+.field-label,
 .tool-picker span {
   color: var(--muted);
   font-size: 11px;
@@ -564,6 +581,67 @@ body.settings-open .history-panel {
   display: flex;
   gap: 8px;
   margin-top: 6px;
+}
+
+.tool-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Tools-tab dropdown: same component as the model picker, but it fills the
+   available width and opens downward. The extra class keeps these rules
+   winning over the later .quick-model-* definitions. */
+.quick-model-picker.tool-dropdown {
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+/* Fixed narrow panel instead of matching the (now full-width) trigger. */
+.quick-model-menu.tool-dropdown-menu {
+  top: calc(100% + 6px);
+  bottom: auto;
+  width: 260px;
+  min-width: 0;
+  max-width: min(260px, calc(100vw - 20px));
+  max-height: 220px;
+}
+
+/* Reorder chevrons, shown only while the dropdown is open. */
+.tool-order-icons {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+.tool-order-icons[hidden] {
+  display: none;
+}
+
+.tool-order-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.tool-order-icon:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tool-order-icon:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .button {
@@ -1940,3 +2018,155 @@ body.settings-open .history-panel {
 }
 
 
+
+/* ---------- Web search ---------- */
+
+/* Globe button next to the model chip. Red = search disabled, blue = enabled. */
+.composer-icon-btn.web-search-btn {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.composer-icon-btn.web-search-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.composer-icon-btn.web-search-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.composer-icon-btn.web-search-btn.active,
+.composer-icon-btn.web-search-btn.active:hover {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.search-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.search-check input {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.search-test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.search-test-head {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.search-test-snippet {
+  color: var(--muted);
+  font-size: 10.5px;
+  margin-top: 2px;
+}
+
+.message-sources {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.sources-title {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.sources-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sources-list li {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.sources-list a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.sources-list a:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Markdown tables ---------- */
+
+.md-table-wrap {
+  margin: 8px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.md-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.md-table-wrap th,
+.md-table-wrap td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.md-table-wrap th {
+  background: rgba(15, 23, 42, 0.06);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.md-table-wrap tbody tr:nth-child(even) td {
+  background: rgba(15, 23, 42, 0.03);
+}
+
+[data-theme="dark"] .md-table-wrap th {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .md-table-wrap tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.03);
+}

@@ -17,7 +17,7 @@
       "tab.cloud": "Cloud Server",
       "tab.local": "Local Server",
       "tab.ui": "UI",
-      "tab.sound": "Sound",
+      "tab.embedded": "Built-in",
       "tab.tools": "Tools",
       "tab.misc": "Misc",
 
@@ -37,6 +37,14 @@
         "Fetched models are enabled by default. Disable any model you don't want in the model dropdown above the chat box. Custom models are kept when you Fetch again.",
       "cloud.keyHint":
         "Your key is stored only in this extension's local browser storage.",
+
+      "consent.title": "Cloud permission",
+      "consent.hint":
+        "Firefox asks for your consent before TuxAI can send text to a cloud provider.",
+      "consent.grant": "Grant permission",
+      "consent.granted": "Permission granted.",
+      "consent.denied":
+        "Permission was not granted. You can also manage it in about:addons → Permissions and data.",
 
       "local.backend": "Backend",
       "local.endpointUrl": "Endpoint URL",
@@ -80,6 +88,9 @@
       "tools.new": "New tool",
       "tools.resetDefaults": "Reset defaults",
       "tools.tool": "Tool",
+      "tools.noTools": "No tools",
+      "tools.moveUp": "Move up",
+      "tools.moveDown": "Move down",
       "tools.name": "Name",
       "tools.namePlaceholder": "Tool name",
       "tools.model": "Model",
@@ -91,6 +102,27 @@
       "tools.promptPlaceholder": "Describe what this tool should do...",
       "tools.save": "Save tool",
       "tools.delete": "Delete",
+
+      "search.title": "Web search",
+      "search.on": "Web search on",
+      "search.off": "Web search off",
+      "search.toggleHint":
+        "Use the globe button next to the model picker above the chat to allow or disallow web search. It is red when off and blue when on, and off by default; when it is on, the model decides on its own when it needs to search.",
+      "search.fetchPages": "Also read the top result pages for better answers",
+      "search.nativeOpenai":
+        "Use OpenAI's built-in web search when available (OpenAI only)",
+      "search.hint":
+        "Queries go to DuckDuckGo, with Bing as a fallback when DuckDuckGo blocks the request; only OpenAI's native search uses your API key.",
+      "search.testTitle": "Test search",
+      "search.testQuery": "Query",
+      "search.testPlaceholder": "Latest news about...",
+      "search.test": "Test search",
+      "search.testing": "Searching...",
+      "search.engine": "Engine",
+      "search.results": "results",
+      "search.testFailed": "Search failed",
+      "search.sources": "Sources",
+      "search.searching": "Searching the web",
 
       "misc.title": "Backup/Restore settings",
       "misc.export": "Export settings backup",
@@ -108,6 +140,7 @@
 
       "composer.noModel": "No model selected",
       "composer.switchModel": "Switch model",
+      "composer.webSearch": "Web search (off by default)",
       "composer.attach": "Attach file/image",
       "composer.history": "Previous chat sessions",
       "composer.newChat": "New chat",
@@ -176,7 +209,7 @@
       "tab.cloud": "云端服务",
       "tab.local": "本地服务",
       "tab.ui": "界面",
-      "tab.sound": "声音",
+      "tab.embedded": "内嵌功能",
       "tab.tools": "工具",
       "tab.misc": "其他",
 
@@ -195,6 +228,12 @@
       "cloud.modelsHint":
         "获取到的模型默认启用。可在聊天框上方的模型下拉里禁用不需要的模型。再次获取会保留自定义模型。",
       "cloud.keyHint": "密钥只保存在此扩展的本地浏览器存储中。",
+
+      "consent.title": "云端权限",
+      "consent.hint": "Firefox 需要你授权后，TuxAI 才能把内容发送到云端服务商。",
+      "consent.grant": "授予权限",
+      "consent.granted": "已授予权限。",
+      "consent.denied": "未授予权限。你也可以在 about:addons → 权限与数据 中管理。",
 
       "local.backend": "后端",
       "local.endpointUrl": "服务地址",
@@ -237,6 +276,9 @@
       "tools.new": "新建工具",
       "tools.resetDefaults": "恢复默认",
       "tools.tool": "工具",
+      "tools.noTools": "没有工具",
+      "tools.moveUp": "上移",
+      "tools.moveDown": "下移",
       "tools.name": "名称",
       "tools.namePlaceholder": "工具名称",
       "tools.model": "模型",
@@ -248,6 +290,26 @@
       "tools.promptPlaceholder": "描述这个工具应该做什么……",
       "tools.save": "保存工具",
       "tools.delete": "删除",
+
+      "search.title": "网页搜索",
+      "search.on": "网页搜索已开启",
+      "search.off": "网页搜索已关闭",
+      "search.toggleHint":
+        "使用聊天框上方模型选择器旁边的地球按钮开启或关闭网页搜索。关闭时显示红色，开启时显示蓝色，默认关闭；开启后由模型自行决定何时搜索。",
+      "search.fetchPages": "同时读取前几个结果页面，以获得更好的回答",
+      "search.nativeOpenai": "可用时使用 OpenAI 内置网页搜索（仅 OpenAI）",
+      "search.hint":
+        "查询会发送到 DuckDuckGo；当 DuckDuckGo 拒绝请求时自动改用 Bing。只有 OpenAI 内置搜索会使用你的 API key。",
+      "search.testTitle": "测试搜索",
+      "search.testQuery": "查询",
+      "search.testPlaceholder": "例如：最新新闻……",
+      "search.test": "测试搜索",
+      "search.testing": "搜索中……",
+      "search.engine": "引擎",
+      "search.results": "条结果",
+      "search.testFailed": "搜索失败",
+      "search.sources": "来源",
+      "search.searching": "正在搜索网页",
 
       "misc.title": "备份 / 恢复设置",
       "misc.export": "导出设置备份",
@@ -265,6 +327,7 @@
 
       "composer.noModel": "未选择模型",
       "composer.switchModel": "切换模型",
+      "composer.webSearch": "网页搜索（默认关闭）",
       "composer.attach": "附加文件/图片",
       "composer.history": "历史会话",
       "composer.newChat": "新对话",

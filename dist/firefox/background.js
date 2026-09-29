@@ -8,6 +8,7 @@ const TOOL_STORAGE_KEYS = {
   custom: "penguin_custom_tools",
   overrides: "penguin_tool_overrides",
   deleted: "penguin_tool_deleted",
+  order: "penguin_tool_order",
 };
 
 const BUILTIN_TOOLS = [
@@ -48,6 +49,11 @@ async function getToolState() {
     deleted: Array.isArray(stored[TOOL_STORAGE_KEYS.deleted])
       ? stored[TOOL_STORAGE_KEYS.deleted]
       : [],
+    order: Array.isArray(stored[TOOL_STORAGE_KEYS.order])
+      ? stored[TOOL_STORAGE_KEYS.order].filter(
+          (id) => typeof id === "string"
+        )
+      : [],
   };
 }
 
@@ -55,18 +61,51 @@ function isBuiltInTool(id) {
   return BUILTIN_TOOLS.some((tool) => tool.id === id);
 }
 
-// Applies deletions + overrides to built-ins, then appends custom tools.
+// Applies deletions + overrides to built-ins, then appends custom tools, and
+// finally applies the user-defined order. Ids that are not in the order list
+// (new tools, tools from an older backup) keep their default relative order and
+// go last; ids in the order list that no longer exist are ignored.
 function effectiveToolsFromState(state) {
   const builtins = [];
   for (const tool of BUILTIN_TOOLS) {
     if (state.deleted.includes(tool.id)) continue;
     builtins.push(state.overrides[tool.id] || tool);
   }
-  return builtins.concat(state.customTools);
+  const tools = builtins.concat(state.customTools);
+  const order = Array.isArray(state.order) ? state.order : [];
+  if (!order.length) return tools;
+
+  const rank = new Map();
+  for (const id of order) {
+    if (!rank.has(id)) rank.set(id, rank.size);
+  }
+  if (!rank.size) return tools;
+
+  const unranked = rank.size;
+  return tools
+    .map((tool, index) => ({
+      tool,
+      index,
+      rank: rank.has(tool.id) ? rank.get(tool.id) : unranked,
+    }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.tool);
 }
 
 async function getEffectiveTools() {
   return effectiveToolsFromState(await getToolState());
+}
+
+// Returns a new id list with `id` moved by `delta` positions, or null when the
+// move is impossible (unknown id, or already at the top/bottom). Kept pure so
+// the Tools-tab move buttons have no DOM/storage logic of their own.
+function moveToolId(orderIds, id, delta) {
+  const index = orderIds.indexOf(id);
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= orderIds.length) return null;
+  const ids = orderIds.slice();
+  [ids[index], ids[target]] = [ids[target], ids[index]];
+  return ids;
 }
 
 // TuxAI - background service worker / event page.

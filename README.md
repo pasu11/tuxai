@@ -12,6 +12,7 @@ It provides:
 - Right-click context menu for running tools on selected text
 - Reusable tools (system-prompt presets) with built-in defaults and full create/edit/delete support
 - Text-to-speech (read assistant replies aloud, in the sidebar or the page popup)
+- Opt-in web search with cited sources (globe button, off by default; DuckDuckGo with a Bing fallback, OpenAI can use its built-in search)
 - Chat history (previous sessions are saved locally and can be reopened or deleted)
 - File and image attachments
 - Backup/restore of all settings (including API keys, models, tools, and chat history) as a JSON file
@@ -206,7 +207,7 @@ API keys are stored only in the extension's local browser storage. Each provider
 - Responses stream in; Markdown is rendered live, and reasoning output is shown in a collapsible box when the model provides it.
 - While a reply streams, the chat auto-scrolls until the top of the reply (model label included) is pinned at the top of the view. It then stops so you can read from the beginning; click the floating **↓** button to jump to the newest text and follow the rest of the stream. Scrolling up pauses auto-scroll.
 - Click the copy icon under any message to copy its full text.
-- Click the speaker icon under an assistant message to read it aloud (see [Text-to-speech](#7-text-to-speech)).
+- Click the speaker icon under an assistant message to read it aloud (see [Text-to-speech](#8-text-to-speech)).
 - Use the **+** button to start a new chat, and the **history** button to toggle the previous-sessions panel (click it again, press **Back**, or press **Esc** to return to the chat). Chat sessions are saved in local browser storage.
 
 ### 3. Send selected text to the sidebar
@@ -252,6 +253,7 @@ Settings → Tools
 - Pick a **model** for each tool. By default a tool uses the model selected in the chat window; choose another fetched model to always use it for that tool (for example, translate with a different provider than you chat with).
 - Edit existing tools.
 - Delete tools.
+- Reorder tools with the **chevron up / down** icons that appear to the right of the tool list while it is open. The order is applied everywhere the tool buttons appear: the selection panel, the floating quick popup, and the right-click menu. **Reset defaults** clears the custom order too.
 - Reset to the default tools:
   - **translate** → `translate to english`
   - **summarize** → `summarize`
@@ -260,12 +262,30 @@ Settings → Tools
 
 Tools are applied to selected text through the selection panel, the floating quick popup, and the right-click menu.
 
-### 7. Text-to-speech
+### 7. Web search
+
+TuxAI can give the model a `web_search` tool. The **globe button next to the model picker** above the chat turns it on or off; it is **off by default** (red icon) and turns blue when enabled, so nothing changes until you enable it. Once on, the model decides on its own when it needs the web (current events, prices, versions, dates, or facts it is unsure about) — you do not have to ask it to search. Searches run entirely in your browser and no API key is required.
 
 Open:
 
 ```
-Settings → Sound
+Settings → Built-in
+```
+
+- **Also read the top result pages...** — when enabled, the top three results are fetched and summarized into the context for a better answer (default on).
+- **Use OpenAI's built-in web search...** — for the OpenAI provider only, TuxAI first uses OpenAI's server-side web search (Responses API); if the model or account does not support it, it automatically falls back to the local tool loop.
+- **Test search** — type a query and click **Test search** to confirm the engine works and preview results.
+
+Search calls the DuckDuckGo HTML endpoint; when DuckDuckGo answers with a bot challenge (which happens on some networks), TuxAI retries automatically with Bing. Results used in an answer are listed as clickable **Sources** under the reply and are kept with the chat history.
+
+Web search works with OpenAI, DeepSeek, Mistral, custom OpenAI-compatible endpoints, and local OpenAI-compatible servers. Anthropic, Gemini, and Cohere keep their normal behavior. DeepSeek's `deepseek-reasoner` cannot call tools, so it is skipped automatically.
+
+### 8. Text-to-speech
+
+Open:
+
+```
+Settings → Built-in
 ```
 
 - Choose a **TTS provider**. It is independent of the chat provider, so you can chat with one provider and speak with another. Leave it as **Same as chat provider** to reuse the chat connection, or pick a cloud provider (for example OpenAI) to reuse that provider's stored key.
@@ -276,7 +296,7 @@ Settings → Sound
 
 For example, chat with DeepSeek while speaking with OpenAI: set the TTS provider to **OpenAI**, the TTS model to `gpt-4o-mini-tts`, and choose a voice.
 
-### 8. UI settings
+### 9. UI settings
 
 Open:
 
@@ -291,7 +311,7 @@ Settings → UI
 - **Language**: Auto (follow browser), English, or 中文. Applies to the sidebar and the page popup.
 - **Popup shortcut**: the modifier used to open the floating quick popup.
 
-### 9. Backup and restore
+### 10. Backup and restore
 
 Open:
 
@@ -313,6 +333,7 @@ sidebar/sidebar.js         # Sidebar logic
 lib/tools.js               # Shared tool definitions and storage helpers
 lib/i18n.js                # English/Chinese UI strings
 lib/markdown.js            # Small Markdown renderer
+lib/websearch.js           # Keyless web search (DuckDuckGo + Bing fallback)
 manifest.json              # Chrome/Vivaldi manifest
 manifest.firefox.json      # Firefox manifest template
 scripts/build.mjs          # Build script
@@ -334,6 +355,7 @@ See the full [PRIVACY.md](PRIVACY.md) for details.
 
 - Local-server requests go directly to the LLM server you configure.
 - Cloud requests go directly from your browser to the cloud provider you select.
+- Web search is off by default. When you turn it on, it sends the query to DuckDuckGo, or Bing if DuckDuckGo blocks it, and fetches the top result pages directly from your browser. No TuxAI server is involved.
 - API keys are stored only in the extension's local browser storage.
 - Chat sessions, settings, and attachments are stored in the extension's local browser storage, not in the cloud.
 

@@ -38,6 +38,7 @@ This includes:
 - UI preferences such as theme, text size, interface size, context size, and language
 - Chat sessions (message text) used by the history panel
 - Text-to-speech settings (provider, model, voice, and optional URL/key override)
+- Web search settings (on/off toggle, whether to read result pages, and whether to use OpenAI's built-in search)
 - Temporary delivery data used to send a selected text or context-menu run from a webpage to the sidebar
 
 These values stay in your browser's extension storage. They are not sent anywhere except when a request is needed for the configured AI provider.
@@ -57,6 +58,7 @@ Only user-triggered requests:
 1. **Model list fetch** — when you click a Fetch button, TuxAI asks your configured server for its model list.
 2. **AI chat/action request** — when you send a message or run a tool, TuxAI sends your message/selected text, any attachments, and the tool instruction to the configured AI server.
 3. **Text-to-speech request** — when you click a speaker button (or **Test** in the Sound settings), TuxAI sends the text to be spoken to the configured TTS endpoint.
+4. **Web search** — only when you turn it on with the globe button next to the model picker (it is off by default) and the model decides it needs the web, TuxAI sends the search query to DuckDuckGo, or to Bing when DuckDuckGo answers with a bot challenge, and (unless disabled) fetches the top result pages directly from your browser to build the context for that answer. This goes to those search engines/websites, never to a TuxAI server.
 
 File and image attachments are read in the browser and included only in the request to the configured AI provider. They are not uploaded to any TuxAI server.
 
@@ -68,19 +70,23 @@ If you use a cloud provider such as OpenAI, DeepSeek, Anthropic, Gemini, Mistral
 
 On Firefox 140+ the extension declares `personalCommunications` and
 `websiteContent` as *optional* data-collection permissions. Firefox therefore
-asks for your consent the first time you switch to the Cloud Server settings;
-the choice is remembered and can be changed at any time in `about:addons` →
-**Permissions and data**. Local-server usage never triggers this prompt.
+asks for your consent the first time you send a message or switch to the Cloud
+Server settings; the choice is remembered and can be changed at any time in
+`about:addons` → **Permissions and data**. If the prompt did not appear, open
+**Settings → Cloud Server** and click **Grant permission**. Local-server usage
+never triggers this prompt.
 
 ## Permissions
 
 TuxAI asks for `http://*/*` and `https://*/*` host permissions so its content script can detect text selection on webpages.
 
-TuxAI does not scrape or read pages. It only reacts when you:
+TuxAI does not scrape or read the pages you visit. It only reacts when you:
 
 - Select text normally (to show it in the sidebar), or
 - Select text with the configured shortcut (to show the quick popup), or
 - Use the TuxAI right-click context menu
+
+The only exception is web search, which is off by default: when you enable it with the globe button and the model asks for it, TuxAI fetches the top search-result pages (plain text only) and includes that text in the request to your AI provider.
 
 ## API keys
 
