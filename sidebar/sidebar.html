@@ -23,10 +23,8 @@
 
       <div class="header-actions">
         <button id="lang-toggle" class="icon-button" type="button" title="Switch language" aria-label="Switch language" data-i18n-title="header.toggleLanguage" data-i18n-aria-label="header.toggleLanguage">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M2 12h20"></path>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" stroke="none">
+            <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"></path>
           </svg>
         </button>
         <button id="theme-toggle" class="icon-button" type="button" title="Toggle theme" aria-label="Toggle theme" data-i18n-title="header.toggleTheme" data-i18n-aria-label="header.toggleTheme">
@@ -49,7 +47,7 @@
         <button id="settings-tab-cloud" type="button" class="settings-tab active" role="tab" aria-selected="true" data-settings-tab="cloud" data-i18n="tab.cloud">Cloud Server</button>
         <button id="settings-tab-local" type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="local" data-i18n="tab.local">Local Server</button>
         <button id="settings-tab-ui" type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="ui" data-i18n="tab.ui">UI</button>
-        <button id="settings-tab-sound" type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="sound" data-i18n="tab.sound">Sound</button>
+        <button id="settings-tab-embedded" type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="embedded" data-i18n="tab.embedded">Built-in</button>
         <button id="settings-tab-tools" type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="tools" data-i18n="tab.tools">Tools</button>
         <button id="settings-tab-misc" type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="misc" data-i18n="tab.misc">Misc</button>
       </div>
@@ -95,6 +93,14 @@
             </div>
             <div id="cloud-model-manager" class="model-manager" aria-labelledby="cloud-models-label"></div>
             <select id="cloud-model-select" hidden></select>
+          </div>
+        </div>
+
+        <div id="cloud-consent" class="settings-card" hidden>
+          <div class="settings-card-title" data-i18n="consent.title">Cloud permission</div>
+          <p class="hint" id="cloud-consent-status" data-i18n="consent.hint">Firefox asks for your consent before TuxAI can send text to a cloud provider.</p>
+          <div class="tool-actions">
+            <button id="cloud-consent-grant" type="button" class="button button-primary" data-i18n="consent.grant">Grant permission</button>
           </div>
         </div>
       </div>
@@ -192,7 +198,7 @@
         </div>
       </div>
 
-      <div id="settings-page-sound" class="settings-page" role="tabpanel" aria-labelledby="settings-tab-sound" hidden>
+      <div id="settings-page-embedded" class="settings-page" role="tabpanel" aria-labelledby="settings-tab-embedded" hidden>
         <div class="settings-card">
           <div class="settings-card-title" data-i18n="sound.title">Text to speech</div>
           <div class="field">
@@ -222,6 +228,31 @@
             </div>
           </div>
         </div>
+
+        <div class="settings-card">
+          <div class="settings-card-title" data-i18n="search.title">Web search</div>
+          <p class="hint" data-i18n="search.toggleHint">Use the globe button next to the model picker above the chat to allow or disallow web search. It is red when off and blue when on, and off by default; when it is on, the model decides on its own when it needs to search.</p>
+          <label class="search-check">
+            <input id="web-search-fetch-pages" type="checkbox" />
+            <span data-i18n="search.fetchPages">Also read the top result pages for better answers</span>
+          </label>
+          <label class="search-check">
+            <input id="web-search-native" type="checkbox" />
+            <span data-i18n="search.nativeOpenai">Use OpenAI's built-in web search when available (OpenAI only)</span>
+          </label>
+          <p class="hint" data-i18n="search.hint">Queries go to DuckDuckGo, with Bing as a fallback when DuckDuckGo blocks the request; only OpenAI's native search uses your API key.</p>
+        </div>
+        <div class="settings-card">
+          <div class="settings-card-title" data-i18n="search.testTitle">Test search</div>
+          <div class="field">
+            <label for="web-search-test-query" data-i18n="search.testQuery">Query</label>
+            <input id="web-search-test-query" type="text" placeholder="Latest news about..." spellcheck="false" data-i18n-placeholder="search.testPlaceholder" />
+          </div>
+          <div class="tool-actions">
+            <button id="web-search-test-btn" type="button" class="button button-secondary" data-i18n="search.test">Test search</button>
+          </div>
+          <div id="web-search-test-result" class="search-test-result" hidden></div>
+        </div>
       </div>
 
       <div id="settings-page-tools" class="settings-page" role="tabpanel" aria-labelledby="settings-tab-tools" hidden>
@@ -232,8 +263,30 @@
             <button id="reset-tools" type="button" class="button button-ghost" data-i18n="tools.resetDefaults">Reset defaults</button>
           </div>
           <div class="field">
-            <label for="manage-tool" data-i18n="tools.tool">Tool</label>
-            <select id="manage-tool"></select>
+            <span id="manage-tool-field-label" class="field-label" data-i18n="tools.tool">Tool</span>
+            <div id="manage-tool-picker" class="tool-picker-row">
+              <div class="quick-model-picker tool-dropdown">
+                <button id="manage-tool-trigger" type="button" class="quick-model-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span id="manage-tool-label" class="quick-model-label"></span>
+                  <svg class="quick-model-caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m6 9 6 6 6-6"></path>
+                  </svg>
+                </button>
+                <div id="manage-tool-menu" class="quick-model-menu tool-dropdown-menu" role="listbox" aria-label="Tools" hidden></div>
+              </div>
+              <div id="tool-order-icons" class="tool-order-icons" hidden>
+                <button id="tool-move-up" type="button" class="tool-order-icon" title="Move up" aria-label="Move up" data-i18n-title="tools.moveUp" data-i18n-aria-label="tools.moveUp">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m6 15 6-6 6 6"></path>
+                  </svg>
+                </button>
+                <button id="tool-move-down" type="button" class="tool-order-icon" title="Move down" aria-label="Move down" data-i18n-title="tools.moveDown" data-i18n-aria-label="tools.moveDown">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m6 9 6 6 6-6"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
           </div>
           <div class="field">
             <label for="tool-name" data-i18n="tools.name">Name</label>
@@ -335,6 +388,13 @@
           </button>
           <div id="quick-model-menu" class="quick-model-menu" hidden role="listbox" aria-label="Models"></div>
         </div>
+        <button id="web-search-btn" type="button" class="composer-icon-btn web-search-btn" title="Web search" aria-label="Web search" aria-pressed="false" data-i18n-title="composer.webSearch" data-i18n-aria-label="composer.webSearch">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M3 12h18"></path>
+            <ellipse cx="12" cy="12" rx="4" ry="9"></ellipse>
+          </svg>
+        </button>
         <div class="composer-spacer"></div>
         <button id="attach-btn" type="button" class="composer-icon-btn" title="Attach file/image" aria-label="Attach file/image" data-i18n-title="composer.attach" data-i18n-aria-label="composer.attach">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

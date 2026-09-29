@@ -6,8 +6,10 @@ import {
   getToolState,
   effectiveToolsFromState,
   isBuiltInTool,
+  moveToolId,
 } from "../lib/tools.js";
 import { renderMarkdown } from "../lib/markdown.js";
+import { searchForTool } from "../lib/websearch.js";
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 
@@ -159,6 +161,44 @@ const CHAT_SESSIONS_KEY = "penguin_chat_sessions";
 const CHAT_TABS_KEY = "penguin_chat_tabs";
 const INTERFACE_SCALE_KEY = "penguin_interface_scale";
 const RESTORED_MODEL_KEY = "penguin_restored_model";
+const WEB_SEARCH_ENABLED_KEY = "penguin_web_search_enabled";
+const WEB_SEARCH_FETCH_PAGES_KEY = "penguin_web_search_fetch_pages";
+const WEB_SEARCH_NATIVE_OPENAI_KEY = "penguin_web_search_native_openai";
+const MAX_SEARCH_ROUNDS = 3;
+
+// Function tool handed to OpenAI-compatible providers. The model decides when
+// to call it; the sidebar executes the search locally (keyless DuckDuckGo with
+// a Bing fallback, see lib/websearch.js). The composer globe button is the
+// single on/off switch and starts off.
+const WEB_SEARCH_TOOL = {
+  type: "function",
+  function: {
+    name: "web_search",
+    description:
+      "Search the public web for current information. Use it when the answer depends on recent events, live data, prices, versions, dates, or facts you are not confident about.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "The search query in natural language, including the key entities and the current year when relevant.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+};
+
+const WEB_SEARCH_INSTRUCTION =
+  "You have a web_search tool. Call it when the user's question depends on current, recent, or verifiable web facts, or when you are not confident. Do not call it for translation, rewriting, arithmetic, or general knowledge you already have. When you use search results, cite them as [1], [2], ...";
+
+const WEB_SEARCH_OFF_INSTRUCTION =
+  "Web search is currently turned off in this app, so you have no live web access right now. If the user asks you to search the web or needs current information, briefly say that web search is off and that they can turn it on with the globe button next to the model picker above the chat, then answer from your own knowledge if you can. Never refer to web-search settings inside other apps or websites.";
+
+const WEB_SEARCH_UNAVAILABLE_INSTRUCTION =
+  "Web search is enabled but the current model/endpoint cannot use it. If the user asks you to search the web, say that this model cannot search and suggest switching to a model that supports tools.";
+
 const BACKUP_FORMAT_VERSION = 1;
 const BACKUP_LOCAL_STORAGE_KEYS = [
   "penguin_mode",
@@ -175,6 +215,9 @@ const BACKUP_LOCAL_STORAGE_KEYS = [
   "penguin_language",
   "penguin_settings_collapsed",
   "penguin_settings_tab",
+  WEB_SEARCH_ENABLED_KEY,
+  WEB_SEARCH_FETCH_PAGES_KEY,
+  WEB_SEARCH_NATIVE_OPENAI_KEY,
 ];
 
 const dom = {
@@ -201,6 +244,9 @@ const dom = {
   serverAddModelCancel: document.getElementById("server-add-model-cancel"),
   fetchModelsBtn: document.getElementById("fetch-models-btn"),
   cloudProvider: document.getElementById("cloud-provider"),
+  cloudConsent: document.getElementById("cloud-consent"),
+  cloudConsentGrant: document.getElementById("cloud-consent-grant"),
+  cloudConsentStatus: document.getElementById("cloud-consent-status"),
   addCloudProviderBtn: document.getElementById("add-cloud-provider-btn"),
   removeCloudProviderBtn: document.getElementById("remove-cloud-provider-btn"),
   addProviderForm: document.getElementById("add-provider-form"),
@@ -236,7 +282,13 @@ const dom = {
   uiLanguage: document.getElementById("ui-language"),
   newTool: document.getElementById("new-tool"),
   resetTools: document.getElementById("reset-tools"),
-  manageTool: document.getElementById("manage-tool"),
+  manageToolPicker: document.getElementById("manage-tool-picker"),
+  manageToolTrigger: document.getElementById("manage-tool-trigger"),
+  manageToolLabel: document.getElementById("manage-tool-label"),
+  manageToolMenu: document.getElementById("manage-tool-menu"),
+  toolOrderIcons: document.getElementById("tool-order-icons"),
+  toolMoveUp: document.getElementById("tool-move-up"),
+  toolMoveDown: document.getElementById("tool-move-down"),
   toolName: document.getElementById("tool-name"),
   toolModelPicker: document.getElementById("tool-model-picker"),
   toolModelTrigger: document.getElementById("tool-model-trigger"),
@@ -271,6 +323,12 @@ const dom = {
   historyList: document.getElementById("history-list"),
   historyClose: document.getElementById("history-close"),
   historyDeleteAll: document.getElementById("history-delete-all"),
+  webSearchBtn: document.getElementById("web-search-btn"),
+  webSearchFetchPages: document.getElementById("web-search-fetch-pages"),
+  webSearchNativeOpenai: document.getElementById("web-search-native"),
+  webSearchTestBtn: document.getElementById("web-search-test-btn"),
+  webSearchTestQuery: document.getElementById("web-search-test-query"),
+  webSearchTestResult: document.getElementById("web-search-test-result"),
 };
 
 const state = {
@@ -279,7 +337,7 @@ const state = {
   customCloudProviders: [],
   cloudStore: {},
   modelOptions: [],
-  toolState: { customTools: [], overrides: {}, deleted: [] },
+  toolState: { customTools: [], overrides: {}, deleted: [], order: [] },
   editingToolId: null,
   editingToolModelRef: "",
   selectedText: "",
@@ -293,6 +351,15 @@ const state = {
   abortController: null,
   lastRunKey: null,
   lastRunAt: 0,
+  webSearch: {
+    // Off by default: the composer globe button turns it on.
+    enabled: localStorage.getItem(WEB_SEARCH_ENABLED_KEY) === "true",
+    fetchPages: localStorage.getItem(WEB_SEARCH_FETCH_PAGES_KEY) !== "false",
+    nativeOpenai: localStorage.getItem(WEB_SEARCH_NATIVE_OPENAI_KEY) !== "false",
+    // Session-only: set when the endpoint rejects tool use / native search.
+    toolsUnsupported: false,
+    nativeUnsupported: false,
+  },
 };
 
 function getActiveTab() {
@@ -345,8 +412,8 @@ let cloudFetchTimer = null;
 const STREAM_TOP_MARGIN = 8;
 let autoScrollMode = "off";
 let lastChatScrollTop = 0;
-const SETTINGS_TAB_IDS = ["cloud", "local", "ui", "sound", "tools", "misc"];
-const SETTINGS_TAB_ALIASES = { chat: "ui", shortcut: "ui" };
+const SETTINGS_TAB_IDS = ["cloud", "local", "ui", "embedded", "tools", "misc"];
+const SETTINGS_TAB_ALIASES = { chat: "ui", shortcut: "ui", sound: "embedded", search: "embedded" };
 let activeSettingsTab = (() => {
   const stored = localStorage.getItem("penguin_settings_tab");
   const normalized = SETTINGS_TAB_ALIASES[stored] || stored;
@@ -369,6 +436,8 @@ async function init() {
   );
   initTtsSettings();
   await hydrateTtsSettingsFromStorage();
+  await hydrateWebSearchSettings();
+  bindWebSearchSettings();
   const savedInterfaceScale = parseFloat(
     localStorage.getItem(INTERFACE_SCALE_KEY)
   );
@@ -378,6 +447,7 @@ async function init() {
   restoreSettingsPanelVisibility();
   bindEvents();
   applyLanguage(localStorage.getItem(LANGUAGE_KEY) || "auto");
+  refreshConsentNotice();
   state.toolState = await getToolState();
   renderTools();
 
@@ -438,6 +508,10 @@ function bindEvents() {
   dom.historyFileInput.addEventListener("change", handleChatHistoryImport);
   bindSettingsTabs();
   bindSelectionTools();
+
+  if (dom.cloudConsentGrant) {
+    dom.cloudConsentGrant.addEventListener("click", grantCloudConsent);
+  }
 
   dom.serverType.addEventListener("change", async () => {
     localStorage.setItem("penguin_server_type", dom.serverType.value);
@@ -656,9 +730,17 @@ function bindEvents() {
     });
   }
 
-  dom.manageTool.addEventListener("change", () => {
-    state.editingToolId = dom.manageTool.value;
-    renderManageFields();
+  dom.manageToolTrigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleManageToolMenu();
+  });
+  dom.toolMoveUp.addEventListener("click", (event) => {
+    event.stopPropagation();
+    moveTool(-1);
+  });
+  dom.toolMoveDown.addEventListener("click", (event) => {
+    event.stopPropagation();
+    moveTool(1);
   });
 
   dom.newTool.addEventListener("click", startNewTool);
@@ -689,12 +771,26 @@ function bindEvents() {
     ) {
       closeToolModelMenu();
     }
+    if (
+      dom.manageToolPicker &&
+      !dom.manageToolPicker.contains(event.target)
+    ) {
+      closeManageToolMenu();
+    }
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     closeQuickModelMenu();
     closeToolModelMenu();
+    closeManageToolMenu();
     if (!dom.historyPanel.hidden) hideHistoryPanel();
+  });
+  // Clicking the page or browser chrome moves focus away from this document,
+  // which the document click handler cannot see; close open dropdowns on blur.
+  window.addEventListener("blur", () => {
+    closeQuickModelMenu();
+    closeToolModelMenu();
+    closeManageToolMenu();
   });
 
   applyFileInputAccept();
@@ -1022,6 +1118,140 @@ async function hydrateTtsSettingsFromStorage() {
   );
 }
 
+// ---------- Web search settings ----------
+
+// The composer globe button is the single on/off switch. The settings tab
+// only configures how search behaves once it is on.
+function syncWebSearchControls() {
+  if (dom.webSearchBtn) {
+    dom.webSearchBtn.classList.toggle("active", state.webSearch.enabled);
+    dom.webSearchBtn.setAttribute(
+      "aria-pressed",
+      state.webSearch.enabled ? "true" : "false"
+    );
+  }
+  if (dom.webSearchFetchPages) {
+    dom.webSearchFetchPages.checked = state.webSearch.fetchPages;
+  }
+  if (dom.webSearchNativeOpenai) {
+    dom.webSearchNativeOpenai.checked = state.webSearch.nativeOpenai;
+  }
+}
+
+function saveWebSearchSetting(key, value) {
+  localStorage.setItem(key, value ? "true" : "false");
+  api.storage.local.set({ [key]: value }).catch(() => {});
+}
+
+function toggleWebSearch() {
+  state.webSearch.enabled = !state.webSearch.enabled;
+  saveWebSearchSetting(WEB_SEARCH_ENABLED_KEY, state.webSearch.enabled);
+  syncWebSearchControls();
+  setStatus(
+    state.webSearch.enabled
+      ? t("search.on", "Web search on")
+      : t("search.off", "Web search off")
+  );
+}
+
+async function hydrateWebSearchSettings() {
+  let stored = {};
+  try {
+    stored = await api.storage.local.get([
+      WEB_SEARCH_ENABLED_KEY,
+      WEB_SEARCH_FETCH_PAGES_KEY,
+      WEB_SEARCH_NATIVE_OPENAI_KEY,
+    ]);
+  } catch (error) {
+    return;
+  }
+  const fields = [
+    [WEB_SEARCH_ENABLED_KEY, "enabled"],
+    [WEB_SEARCH_FETCH_PAGES_KEY, "fetchPages"],
+    [WEB_SEARCH_NATIVE_OPENAI_KEY, "nativeOpenai"],
+  ];
+  for (const [key, field] of fields) {
+    if (typeof stored[key] === "boolean") {
+      state.webSearch[field] = stored[key];
+      localStorage.setItem(key, stored[key] ? "true" : "false");
+    }
+  }
+  syncWebSearchControls();
+}
+
+function bindWebSearchSettings() {
+  if (dom.webSearchBtn) {
+    dom.webSearchBtn.addEventListener("click", toggleWebSearch);
+  }
+
+  const fields = [
+    [dom.webSearchFetchPages, WEB_SEARCH_FETCH_PAGES_KEY, "fetchPages"],
+    [dom.webSearchNativeOpenai, WEB_SEARCH_NATIVE_OPENAI_KEY, "nativeOpenai"],
+  ];
+  for (const [element, key, field] of fields) {
+    if (!element) continue;
+    element.addEventListener("change", () => {
+      state.webSearch[field] = !!element.checked;
+      saveWebSearchSetting(key, !!element.checked);
+    });
+  }
+  syncWebSearchControls();
+
+  if (dom.webSearchTestBtn) {
+    dom.webSearchTestBtn.addEventListener("click", runWebSearchTest);
+  }
+  if (dom.webSearchTestQuery) {
+    dom.webSearchTestQuery.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runWebSearchTest();
+      }
+    });
+  }
+}
+
+async function runWebSearchTest() {
+  if (!dom.webSearchTestResult) return;
+  const query = (dom.webSearchTestQuery?.value || "").trim();
+  if (!query) return;
+  dom.webSearchTestResult.hidden = false;
+  dom.webSearchTestResult.textContent = t("search.testing", "Searching...");
+  try {
+    const outcome = await searchForTool(query, { fetchPages: false, maxResults: 5 });
+    dom.webSearchTestResult.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "search-test-head";
+    head.textContent = `${t("search.engine", "Engine")}: ${outcome.engine} - ${
+      outcome.results.length
+    } ${t("search.results", "results")}`;
+    dom.webSearchTestResult.appendChild(head);
+    const list = document.createElement("ol");
+    list.className = "sources-list";
+    for (const result of outcome.results) {
+      const item = document.createElement("li");
+      const anchor = document.createElement("a");
+      anchor.href = result.url;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.textContent = result.title || result.url;
+      item.appendChild(anchor);
+      if (result.snippet) {
+        const snippet = document.createElement("div");
+        snippet.className = "search-test-snippet";
+        snippet.textContent = result.snippet;
+        item.appendChild(snippet);
+      }
+      list.appendChild(item);
+    }
+    dom.webSearchTestResult.appendChild(list);
+  } catch (error) {
+    dom.webSearchTestResult.textContent = `${t(
+      "search.testFailed",
+      "Search failed"
+    )}: ${error && error.message ? error.message : error}`;
+  }
+}
+
 function applyInterfaceScale(value) {
   let scale = parseFloat(value);
   if (!Number.isFinite(scale)) scale = 1;
@@ -1076,7 +1306,9 @@ function bindSettingsTabs() {
         // Switching to the Cloud tab is an explicit, user-initiated decision
         // to use a remote provider, so this click is a good place to ask for
         // data-collection consent (already granted -> no prompt).
-        requestDataConsent().catch(() => {});
+        requestDataConsent()
+          .catch(() => {})
+          .then(() => refreshConsentNotice());
       } else if (tab === "local") setMode("server");
       else if (tab === "tools") refreshToolModelSelect();
     });
@@ -1107,6 +1339,7 @@ function isBackupStorageKey(key) {
     "penguin_custom_tools",
     "penguin_tool_overrides",
     "penguin_tool_deleted",
+    "penguin_tool_order",
     // TTS settings are mirrored into storage.local so the background worker
     // can read them; they must be part of the backup too.
     "penguin_tts_model",
@@ -1115,6 +1348,9 @@ function isBackupStorageKey(key) {
     "penguin_tts_key",
     "penguin_tts_provider",
     "penguin_language",
+    WEB_SEARCH_ENABLED_KEY,
+    WEB_SEARCH_FETCH_PAGES_KEY,
+    WEB_SEARCH_NATIVE_OPENAI_KEY,
   ];
   if (exactKeys.includes(key)) return true;
   if (/^server_(url|model|model_list|model_disabled|custom_models)_/.test(key)) return true;
@@ -1314,9 +1550,13 @@ const DATA_COLLECTION_TYPES = ["personalCommunications", "websiteContent"];
 
 // Firefox 140+ exposes the built-in data-collection consent API. Chrome and
 // older Firefox builds do not, in which case there is nothing for us to gate.
+// The `browser` global only exists in Firefox (and its forks like Floorp),
+// which keeps Chrome from ever receiving an unknown `data_collection`
+// permission (which it would reject).
 function hasDataCollectionApi() {
   return (
     typeof api !== "undefined" &&
+    typeof browser !== "undefined" &&
     api.permissions &&
     typeof api.permissions.getAll === "function" &&
     typeof api.permissions.request === "function"
@@ -1339,15 +1579,27 @@ async function isDataConsentGranted() {
   }
 }
 
-// Must run from a user gesture (a click); Firefox rejects the request
-// otherwise. Returns true when consent is granted.
+// Starts a consent request. Firefox only accepts `permissions.request()` while
+// it is still handling the user's input, so this MUST be called synchronously
+// from a click/keydown handler - never after an await. Returns a promise.
+function startDataConsentRequest() {
+  if (!hasDataCollectionApi()) return Promise.resolve(true);
+  try {
+    return Promise.resolve(
+      api.permissions.request({ data_collection: DATA_COLLECTION_TYPES })
+    );
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+// For click handlers (Cloud settings tab, "Grant permission" button). Calls
+// startDataConsentRequest() before the first await so the gesture is preserved.
 async function requestDataConsent() {
   if (!hasDataCollectionApi()) return true;
-  if (await isDataConsentGranted()) return true;
+  const request = startDataConsentRequest();
   try {
-    return await api.permissions.request({
-      data_collection: DATA_COLLECTION_TYPES,
-    });
+    return !!(await request);
   } catch (error) {
     return false;
   }
@@ -1372,14 +1624,60 @@ function isLocalEndpoint(url) {
 
 const DATA_CONSENT_REFUSED_MESSAGE =
   "TuxAI needs your permission before it can send your messages or selected " +
-  "text to a cloud provider. Open Settings → Cloud Server to grant it.";
+  "text to a cloud provider. Open Settings → Cloud Server and click " +
+  "\"Grant permission\".";
 
 async function ensureDataConsent(endpointUrl) {
   if (isLocalEndpoint(endpointUrl)) return true;
-  if (await isDataConsentGranted()) return true;
-  if (await requestDataConsent()) return true;
+  if (!hasDataCollectionApi()) return true;
+  // Start the request synchronously, before any await, so Firefox still counts
+  // the click that triggered this send as the authorizing user gesture.
+  const request = startDataConsentRequest();
+  let granted = await isDataConsentGranted();
+  if (!granted) {
+    try {
+      granted = !!(await request);
+    } catch (error) {
+      granted = false;
+    }
+  }
+  if (granted) {
+    refreshConsentNotice();
+    return true;
+  }
   appendSystemMessage(DATA_CONSENT_REFUSED_MESSAGE);
   return false;
+}
+
+// Recovery banner in Cloud settings: shown while consent is still missing.
+async function refreshConsentNotice() {
+  if (!dom.cloudConsent) return;
+  if (!hasDataCollectionApi()) {
+    dom.cloudConsent.hidden = true;
+    return;
+  }
+  const granted = await isDataConsentGranted();
+  dom.cloudConsent.hidden = granted;
+  if (!granted && dom.cloudConsentStatus) {
+    dom.cloudConsentStatus.textContent = t(
+      "consent.hint",
+      "Firefox asks for your consent before TuxAI can send text to a cloud provider."
+    );
+  }
+}
+
+async function grantCloudConsent() {
+  if (!dom.cloudConsent) return;
+  const ok = await requestDataConsent();
+  if (dom.cloudConsentStatus) {
+    dom.cloudConsentStatus.textContent = ok
+      ? t("consent.granted", "Permission granted.")
+      : t(
+          "consent.denied",
+          "Permission was not granted. You can also manage it in about:addons → Permissions and data."
+        );
+  }
+  if (ok) dom.cloudConsent.hidden = true;
 }
 
 // ---------- Mode / connection settings ----------
@@ -2253,25 +2551,95 @@ async function refreshToolModelSelect() {
 function renderTools() {
   const tools = effectiveTools();
 
-  dom.manageTool.innerHTML = "";
-
-  for (const tool of tools) {
-    const manageOption = document.createElement("option");
-    manageOption.value = tool.id;
-    manageOption.textContent = tool.name;
-    dom.manageTool.appendChild(manageOption);
-  }
-
-  if (dom.manageTool.value) {
-    state.editingToolId = dom.manageTool.value;
+  if (tools.some((tool) => tool.id === state.editingToolId)) {
+    // Keep the current selection.
   } else if (tools.length) {
     state.editingToolId = tools[0].id;
-    dom.manageTool.value = tools[0].id;
+  } else {
+    state.editingToolId = "";
   }
 
   renderManageFields();
+  renderManageToolMenu();
 
   if (!dom.selectionPanel.hidden) renderSelectionTools();
+}
+
+function renderManageToolMenu() {
+  const tools = effectiveTools();
+  dom.manageToolMenu.innerHTML = "";
+
+  for (const tool of tools) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className =
+      "quick-model-option" + (tool.id === state.editingToolId ? " active" : "");
+    option.setAttribute("role", "option");
+    option.setAttribute(
+      "aria-selected",
+      String(tool.id === state.editingToolId)
+    );
+
+    const text = document.createElement("span");
+    text.textContent = tool.name;
+    option.appendChild(text);
+
+    // Stops propagation because re-rendering the menu detaches this button,
+    // which would make the document click handler treat it as an outside click
+    // and close the menu.
+    option.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectManageToolOption(tool.id);
+    });
+    dom.manageToolMenu.appendChild(option);
+  }
+
+  if (!tools.length) {
+    const empty = document.createElement("div");
+    empty.className = "quick-model-empty";
+    empty.textContent = t("tools.noTools", "No tools");
+    dom.manageToolMenu.appendChild(empty);
+  }
+
+  updateManageToolLabel();
+}
+
+function updateManageToolLabel() {
+  const tool = effectiveTools().find((item) => item.id === state.editingToolId);
+  if (tool) {
+    dom.manageToolLabel.textContent = tool.name;
+    return;
+  }
+  // A new tool has no id in the list yet, so show the draft name instead of an
+  // empty trigger.
+  const draft = dom.toolName.value.trim();
+  dom.manageToolLabel.textContent = draft || t("tools.noTools", "No tools");
+}
+
+function openManageToolMenu() {
+  dom.manageToolMenu.hidden = false;
+  dom.manageToolTrigger.setAttribute("aria-expanded", "true");
+  dom.toolOrderIcons.hidden = false;
+  updateToolOrderButtons();
+}
+
+function closeManageToolMenu() {
+  dom.manageToolMenu.hidden = true;
+  dom.manageToolTrigger.setAttribute("aria-expanded", "false");
+  dom.toolOrderIcons.hidden = true;
+}
+
+function toggleManageToolMenu() {
+  if (dom.manageToolMenu.hidden) openManageToolMenu();
+  else closeManageToolMenu();
+}
+
+// Selecting keeps the menu open so the user can reorder right away.
+function selectManageToolOption(id) {
+  if (!id || id === state.editingToolId) return;
+  state.editingToolId = id;
+  renderManageFields();
+  renderManageToolMenu();
 }
 
 function renderManageFields() {
@@ -2296,8 +2664,34 @@ function renderManageFields() {
     dom.deleteTool.disabled = true;
   }
 
+  updateToolOrderButtons();
   updateToolModelTrigger();
   renderToolModelMenu();
+}
+
+function updateToolOrderButtons() {
+  const tools = effectiveTools();
+  const index = tools.findIndex((item) => item.id === state.editingToolId);
+  dom.toolMoveUp.disabled = index <= 0;
+  dom.toolMoveDown.disabled = index < 0 || index >= tools.length - 1;
+}
+
+// Persists the order currently shown in the Tools tab as the user-defined
+// order. Swapping two ids is expressed as writing the whole list so that tools
+// missing from the stored order (e.g. just created) get a defined position.
+async function moveTool(delta) {
+  const tools = effectiveTools();
+  const ids = moveToolId(
+    tools.map((item) => item.id),
+    state.editingToolId,
+    delta
+  );
+  if (!ids) return;
+  state.toolState.order = ids;
+
+  await api.storage.local.set({ [TOOL_STORAGE_KEYS.order]: ids });
+
+  renderTools();
 }
 
 function startNewTool() {
@@ -2309,6 +2703,8 @@ function startNewTool() {
   dom.toolPrompt.disabled = false;
   dom.saveTool.disabled = false;
   dom.deleteTool.disabled = true;
+  renderManageToolMenu();
+  updateToolOrderButtons();
   updateToolModelTrigger();
   renderToolModelMenu();
 }
@@ -2350,7 +2746,6 @@ async function saveTool() {
   });
 
   renderTools();
-  dom.manageTool.value = state.editingToolId;
   appendSystemMessage(`Tool "${name}" saved.`);
 }
 
@@ -2369,10 +2764,13 @@ async function deleteTool() {
     );
   }
 
+  state.toolState.order = state.toolState.order.filter((id) => id !== toolId);
+
   await api.storage.local.set({
     [TOOL_STORAGE_KEYS.custom]: state.toolState.customTools,
     [TOOL_STORAGE_KEYS.overrides]: state.toolState.overrides,
     [TOOL_STORAGE_KEYS.deleted]: state.toolState.deleted,
+    [TOOL_STORAGE_KEYS.order]: state.toolState.order,
   });
 
   renderTools();
@@ -2381,11 +2779,13 @@ async function deleteTool() {
 async function resetTools() {
   state.toolState.overrides = {};
   state.toolState.deleted = [];
+  state.toolState.order = [];
 
   await api.storage.local.set({
     [TOOL_STORAGE_KEYS.custom]: state.toolState.customTools,
     [TOOL_STORAGE_KEYS.overrides]: {},
     [TOOL_STORAGE_KEYS.deleted]: [],
+    [TOOL_STORAGE_KEYS.order]: [],
   });
 
   renderTools();
@@ -2483,6 +2883,37 @@ function toggleUserMessageCollapse(messageEl) {
   }
 }
 
+function renderMessageSources(messageEl, sources) {
+  if (!messageEl || !Array.isArray(sources) || !sources.length) return;
+  const bubble = messageEl.querySelector(".bubble") || messageEl;
+  let block = messageEl._sourcesEl;
+  if (!block) {
+    block = document.createElement("div");
+    block.className = "message-sources";
+    messageEl._sourcesEl = block;
+    bubble.appendChild(block);
+  }
+  block.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "sources-title";
+  title.textContent = t("search.sources", "Sources");
+  block.appendChild(title);
+  const list = document.createElement("ol");
+  list.className = "sources-list";
+  for (const source of sources) {
+    if (!source || !source.url) continue;
+    const item = document.createElement("li");
+    const anchor = document.createElement("a");
+    anchor.href = source.url;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    anchor.textContent = source.title || source.url;
+    item.appendChild(anchor);
+    list.appendChild(item);
+  }
+  block.appendChild(list);
+}
+
 function appendMessage(role, content, options = {}) {
   const messageEl = document.createElement("div");
   messageEl.className = `message ${role}`;
@@ -2526,6 +2957,10 @@ function appendMessage(role, content, options = {}) {
   }
 
   messageEl.appendChild(bubble);
+
+  if (role === "ai" && Array.isArray(options.sources) && options.sources.length) {
+    renderMessageSources(messageEl, options.sources);
+  }
 
   if (role !== "system") {
     const actions = document.createElement("div");
@@ -3305,6 +3740,91 @@ async function runToolRequest({ tool, userText, clearComposer }) {
   });
 }
 
+// ---------- Web search (model-decided tool) ----------
+
+function webSearchModelName(override) {
+  if (override) return override.model || "";
+  if (state.mode === "cloud") return getCloudModelValue();
+  return dom.serverModel.value.trim();
+}
+
+// Endpoint/model capability only: can this connection receive a `tools` array
+// at all? Ignores the toggle and the session-only fallback flags.
+function isWebSearchEndpointSupported(override) {
+  const useCloud = override ? override.mode === "cloud" : state.mode === "cloud";
+  const model = webSearchModelName(override);
+  if (!model) return false;
+  if (useCloud) {
+    const provider = override ? override.provider : dom.cloudProvider.value;
+    if (cloudProviderKind(provider) !== "openai") return false;
+    // DeepSeek's reasoner model cannot call functions.
+    if (/reasoner|deepseek-r1/i.test(model)) return false;
+    return true;
+  }
+  // OpenAI-compatible local servers (Ollama, llama.cpp, kobold.cpp, other).
+  return true;
+}
+
+// True when tools should actually be attached. Requires the composer globe
+// toggle; Anthropic, Gemini and Cohere keep working exactly as before.
+function isWebSearchAvailable(override) {
+  if (!state.webSearch.enabled) return false;
+  if (state.webSearch.toolsUnsupported) return false;
+  return isWebSearchEndpointSupported(override);
+}
+
+// OpenAI's server-side web search uses the Responses API. Only the text-only
+// path maps cleanly, so image turns fall back to the client tool loop.
+function isNativeOpenaiSearchAvailable(override, messages) {
+  if (!state.webSearch.enabled) return false;
+  if (!state.webSearch.nativeOpenai) return false;
+  if (state.webSearch.nativeUnsupported) return false;
+  const useCloud = override ? override.mode === "cloud" : state.mode === "cloud";
+  if (!useCloud) return false;
+  const provider = override ? override.provider : dom.cloudProvider.value;
+  if (provider !== "openai") return false;
+  if (!webSearchModelName(override)) return false;
+  if (Array.isArray(messages) && messages.some((item) => Array.isArray(item.content))) {
+    return false;
+  }
+  return true;
+}
+
+function addMessageSources(list, results) {
+  for (const result of results || []) {
+    const url = result && (result.url || result.uri);
+    if (!url) continue;
+    if (list.some((item) => item.url === url)) continue;
+    list.push({ title: result.title || url, url });
+  }
+}
+
+function parseToolArguments(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+}
+
+function isToolUnsupportedError(error) {
+  const status = error && error.status;
+  if (status !== 400 && status !== 404) return false;
+  const message = String((error && error.message) || "");
+  return /tool|function|unsupported|not supported|does not support/i.test(message);
+}
+
+function isNativeSearchUnsupportedError(error) {
+  const status = error && error.status;
+  if (status !== 400 && status !== 404) return false;
+  const message = String((error && error.message) || "");
+  return /web_search|web search|responses|tool|unsupported|not supported/i.test(
+    message
+  );
+}
+
 async function runStreamedChat({
   userText,
   clearComposer,
@@ -3385,14 +3905,28 @@ async function runStreamedChat({
     userText,
     selectedContext
   );
-  const requestMessages = [];
+  const preamble = [];
   if (systemPrompt) {
-    requestMessages.push({ role: "system", content: systemPrompt });
+    preamble.push({ role: "system", content: systemPrompt });
   }
-  requestMessages.push(
+  if (isWebSearchEndpointSupported(override)) {
+    if (!state.webSearch.enabled) {
+      preamble.push({ role: "system", content: WEB_SEARCH_OFF_INSTRUCTION });
+    } else if (state.webSearch.toolsUnsupported) {
+      preamble.push({
+        role: "system",
+        content: WEB_SEARCH_UNAVAILABLE_INSTRUCTION,
+      });
+    } else {
+      preamble.push({ role: "system", content: WEB_SEARCH_INSTRUCTION });
+    }
+  }
+  const buildAgentMessages = (agentMessages) => [
+    ...preamble,
     ...state.messages.map((item) => ({ role: item.role, content: item.content })),
-    userRequestMessage
-  );
+    userRequestMessage,
+    ...agentMessages,
+  ];
   clearAttachments();
 
   // Start every reply in "top" mode: follow the new text until the reply's
@@ -3409,32 +3943,115 @@ async function runStreamedChat({
 
   try {
     let fullText = "";
-    await streamCompletion({
-      messages: requestMessages,
-      signal: controller.signal,
-      override,
-      onDelta: (delta) => {
-        fullText += delta;
-        assistantEl._rawText = fullText;
-        updateAssistantContent(assistantEl, fullText);
-        setStatus("Generating...");
-      },
-      onReasoning: (delta) => {
-        assistantEl._rawReasoning += delta;
-        updateReasoningBox(assistantEl, assistantEl._rawReasoning);
-        setStatus("Reasoning...");
-      },
-    });
+    let roundText = "";
+    const sources = [];
+    const agentMessages = [];
+    let round = 0;
+
+    while (true) {
+      const toolsActive =
+        isWebSearchAvailable(override) && round < MAX_SEARCH_ROUNDS;
+      trimHistoryToFit(
+        estimated + messagesTokens(agentMessages),
+        contextSize
+      );
+      const requestMessages = buildAgentMessages(agentMessages);
+      const nativeSearch =
+        toolsActive && isNativeOpenaiSearchAvailable(override, requestMessages);
+      let result;
+      try {
+        result = await streamCompletion({
+          messages: requestMessages,
+          signal: controller.signal,
+          override,
+          tools: toolsActive ? [WEB_SEARCH_TOOL] : null,
+          nativeSearch,
+          onDelta: (delta) => {
+            fullText += delta;
+            roundText += delta;
+            assistantEl._rawText = fullText;
+            updateAssistantContent(assistantEl, fullText);
+            setStatus("Generating...");
+          },
+          onReasoning: (delta) => {
+            assistantEl._rawReasoning += delta;
+            updateReasoningBox(assistantEl, assistantEl._rawReasoning);
+            setStatus("Reasoning...");
+          },
+        });
+      } catch (error) {
+        if (!controller.signal.aborted && nativeSearch && isNativeSearchUnsupportedError(error)) {
+          state.webSearch.nativeUnsupported = true;
+          roundText = "";
+          continue;
+        }
+        if (!controller.signal.aborted && toolsActive && isToolUnsupportedError(error)) {
+          state.webSearch.toolsUnsupported = true;
+          roundText = "";
+          appendSystemMessage(
+            "This model/endpoint does not support tool calls, so web search was skipped."
+          );
+          continue;
+        }
+        throw error;
+      }
+
+      if (result && Array.isArray(result.annotations)) {
+        addMessageSources(sources, result.annotations);
+      }
+
+      if (!toolsActive || !result || !result.toolCalls || !result.toolCalls.length) {
+        break;
+      }
+
+      agentMessages.push({
+        role: "assistant",
+        content: roundText || "",
+        tool_calls: result.toolCalls,
+      });
+      roundText = "";
+
+      for (const call of result.toolCalls) {
+        const args = parseToolArguments(call.function && call.function.arguments);
+        const query =
+          (args && typeof args.query === "string" ? args.query.trim() : "") ||
+          userText;
+        setStatus(`${t("search.searching", "Searching the web")}: ${query}...`);
+        let block;
+        try {
+          const outcome = await searchForTool(query, {
+            signal: controller.signal,
+            fetchPages: state.webSearch.fetchPages,
+          });
+          addMessageSources(sources, outcome.results);
+          block = outcome.block;
+        } catch (searchError) {
+          if (controller.signal.aborted) throw searchError;
+          const detail =
+            searchError && searchError.message ? searchError.message : searchError;
+          block = `Web search failed: ${detail}. Answer with what you know and say the lookup failed.`;
+        }
+        agentMessages.push({
+          role: "tool",
+          tool_call_id: call.id || `call_${round}`,
+          content: block,
+        });
+      }
+      round += 1;
+      setStatus("Generating...");
+    }
 
     const storedUserText = attachmentNames
       ? `${userText}\n\n[Attached: ${attachmentNames}]`
       : userText;
     state.messages.push({ role: "user", content: storedUserText });
     if (fullText.trim()) {
+      if (sources.length) renderMessageSources(assistantEl, sources);
       state.messages.push({
         role: "assistant",
         content: fullText,
         label: messageLabel,
+        ...(sources.length ? { sources } : {}),
       });
       setStatus("Done");
     } else {
@@ -3879,6 +4496,9 @@ async function saveTabSession(tab) {
       role: m.role,
       content: typeof m.content === "string" ? m.content : String(m.content || ""),
       ...(m.label ? { label: m.label } : {}),
+      ...(Array.isArray(m.sources) && m.sources.length
+        ? { sources: m.sources.map((s) => ({ title: s.title, url: s.url })) }
+        : {}),
     })),
   };
 
@@ -3899,7 +4519,7 @@ function renderChatFromState() {
   for (const item of state.messages) {
     // Stored messages use the API role "assistant"; the UI class is "ai".
     const role = item.role === "assistant" ? "ai" : item.role;
-    appendMessage(role, item.content, { label: item.label });
+    appendMessage(role, item.content, { label: item.label, sources: item.sources });
   }
   scrollChatToBottom(true);
 }
@@ -5079,8 +5699,16 @@ function trimHistoryToFit(newMessageTokens, contextSize) {
 
 // ---------- Streaming ----------
 
-async function streamCompletion({ messages, signal, onDelta, onReasoning, override }) {
-  const config = buildRequestConfig(messages, override);
+async function streamCompletion({
+  messages,
+  signal,
+  onDelta,
+  onReasoning,
+  override,
+  tools = null,
+  nativeSearch = false,
+}) {
+  const config = buildRequestConfig(messages, override, { tools, nativeSearch });
   const response = await fetch(config.url, {
     method: "POST",
     headers: config.headers,
@@ -5090,13 +5718,18 @@ async function streamCompletion({ messages, signal, onDelta, onReasoning, overri
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status} - ${text || response.statusText}`);
+    const error = new Error(
+      `HTTP ${response.status} - ${text || response.statusText}`
+    );
+    error.status = response.status;
+    throw error;
   }
 
-  await consumeStream(response, config.streamKind, onDelta, onReasoning);
+  return consumeStream(response, config.streamKind, onDelta, onReasoning);
 }
 
-function buildRequestConfig(messages, override) {
+function buildRequestConfig(messages, override, options = {}) {
+  const tools = options.tools || null;
   const bodyMessages = Array.isArray(messages) ? messages : [];
   const useCloud = override ? override.mode === "cloud" : state.mode === "cloud";
 
@@ -5199,6 +5832,41 @@ function buildRequestConfig(messages, override) {
       };
     }
 
+    // OpenAI native web search uses the Responses API instead of chat
+    // completions. Only OpenAI proper is mapped here; other OpenAI-compatible
+    // providers use the client-side tool loop below.
+    if (options.nativeSearch && provider === "openai") {
+      const instructions = bodyMessages
+        .filter((item) => item.role === "system")
+        .map((item) => String(item.content || ""))
+        .filter(Boolean)
+        .join("\n\n");
+      const input = bodyMessages
+        .filter((item) => item.role !== "system")
+        .map((item) => ({
+          role: item.role === "assistant" ? "assistant" : "user",
+          content: String(item.content || ""),
+        }));
+      return {
+        url: `${baseUrl}/v1/responses`,
+        streamKind: "responses-sse",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: {
+          model,
+          input,
+          ...(instructions ? { instructions } : {}),
+          tools: [{ type: "web_search" }],
+          tool_choice: "auto",
+          stream: true,
+          store: false,
+          max_output_tokens: 4096,
+        },
+      };
+    }
+
     // OpenAI-compatible: OpenAI, DeepSeek, Mistral, custom servers.
     return {
       url: `${baseUrl}/v1/chat/completions`,
@@ -5211,6 +5879,7 @@ function buildRequestConfig(messages, override) {
         model,
         messages: bodyMessages,
         stream: true,
+        ...(tools ? { tools } : {}),
       },
     };
   }
@@ -5231,6 +5900,7 @@ function buildRequestConfig(messages, override) {
         model,
         messages: bodyMessages,
         stream: true,
+        ...(tools ? { tools } : {}),
       },
     };
   }
@@ -5243,6 +5913,7 @@ function buildRequestConfig(messages, override) {
       model,
       messages: bodyMessages,
       stream: true,
+      ...(tools ? { tools } : {}),
     },
   };
 }
@@ -5251,6 +5922,32 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const result = { toolCalls: [], annotations: [], finishReason: "" };
+
+  const mergeToolCall = (toolCall) => {
+    if (!toolCall) return;
+    const index = Number.isInteger(toolCall.index)
+      ? toolCall.index
+      : result.toolCalls.length;
+    let acc = result.toolCalls[index];
+    if (!acc) {
+      acc = { id: "", type: "function", function: { name: "", arguments: "" } };
+      result.toolCalls[index] = acc;
+    }
+    if (toolCall.id) acc.id = String(toolCall.id);
+    const fn = toolCall.function || {};
+    if (fn.name) acc.function.name += String(fn.name);
+    if (typeof fn.arguments === "string") {
+      acc.function.arguments += fn.arguments;
+    } else if (fn.arguments && typeof fn.arguments === "object") {
+      acc.function.arguments += JSON.stringify(fn.arguments);
+    }
+  };
+
+  const finalizeResult = (value) => {
+    value.toolCalls = value.toolCalls.filter(Boolean);
+    return value;
+  };
 
   const handleNdjsonLine = (line) => {
     if (!line.trim()) return false;
@@ -5266,6 +5963,9 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     }
     const delta = message.content ? message.content : "";
     if (delta) onDelta(delta);
+    if (Array.isArray(message.tool_calls)) {
+      message.tool_calls.forEach((toolCall) => mergeToolCall(toolCall));
+    }
     return !!data.done;
   };
 
@@ -5276,13 +5976,16 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     if (payload === "[DONE]") return true;
     try {
       const data = JSON.parse(payload);
-      const delta = (data.choices &&
-        data.choices[0] &&
-        data.choices[0].delta) || {};
+      const first = (data.choices && data.choices[0]) || {};
+      const delta = first.delta || {};
+      if (first.finish_reason) result.finishReason = first.finish_reason;
       if ((delta.reasoning_content || delta.reasoning) && onReasoning) {
         onReasoning(delta.reasoning_content || delta.reasoning);
       }
       if (delta.content) onDelta(delta.content);
+      if (Array.isArray(delta.tool_calls)) {
+        delta.tool_calls.forEach((toolCall) => mergeToolCall(toolCall));
+      }
     } catch (error) {
       // Ignore malformed SSE chunks.
     }
@@ -5350,11 +6053,66 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     return false;
   };
 
+  const handleResponsesSseLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return false;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === "[DONE]") return false;
+    let data;
+    try {
+      data = JSON.parse(payload);
+    } catch (error) {
+      return false;
+    }
+    const type = data.type || "";
+    if (type === "response.output_text.delta" && typeof data.delta === "string") {
+      onDelta(data.delta);
+    } else if (type === "response.refusal.delta" && typeof data.delta === "string") {
+      onDelta(data.delta);
+    } else if (
+      type === "response.reasoning_summary_text.delta" &&
+      onReasoning &&
+      typeof data.delta === "string"
+    ) {
+      onReasoning(data.delta);
+    } else if (type === "response.output_text.annotation.added" && data.annotation) {
+      result.annotations.push(data.annotation);
+    } else if (type === "response.completed") {
+      const output = data.response && data.response.output;
+      if (Array.isArray(output)) {
+        for (const item of output) {
+          if (Array.isArray(item.annotations)) result.annotations.push(...item.annotations);
+          if (Array.isArray(item.content)) {
+            for (const part of item.content) {
+              if (Array.isArray(part.annotations)) {
+                result.annotations.push(...part.annotations);
+              }
+            }
+          }
+        }
+      }
+      return true;
+    } else if (type === "response.failed" || type === "response.incomplete") {
+      const responseObj = data.response || {};
+      const detail = responseObj.error || {};
+      const reason =
+        responseObj.incomplete_details && responseObj.incomplete_details.reason;
+      const error = new Error(
+        detail.message ||
+          (reason ? `Response incomplete: ${reason}` : "OpenAI response failed")
+      );
+      error.status = 400;
+      throw error;
+    }
+    return false;
+  };
+
   const getHandler = () => {
     if (kind === "ndjson") return handleNdjsonLine;
     if (kind === "anthropic-sse") return handleAnthropicSseLine;
     if (kind === "gemini-sse") return handleGeminiSseLine;
     if (kind === "cohere-sse") return handleCohereSseLine;
+    if (kind === "responses-sse") return handleResponsesSseLine;
     return handleSseLine;
   };
 
@@ -5368,13 +6126,14 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     const handler = getHandler();
 
     for (const part of parts) {
-      if (handler(part)) return;
+      if (handler(part)) return finalizeResult(result);
     }
   }
 
   if (buffer.trim()) {
     getHandler()(buffer);
   }
+  return finalizeResult(result);
 }
 
 // ---------- External run support (context menu / Alt+select) ----------

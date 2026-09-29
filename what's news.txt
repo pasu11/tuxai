@@ -17,3 +17,24 @@
 1.2.3
 -seperate models for each tool
 -translate interface icon
+
+1.2.4
+-globe toggle next to the model picker to allow/disallow web search (off by default)
+-model-decided web search tool (no API key needed)
+-duckduckgo search with automatic bing fallback
+-reads top result pages and shows sources under the answer
+-openai native web search via the responses api when available
+-built-in tab (sound + search) with fetch-pages/native toggles and a test button
+-language button now uses a translate icon; search globe is red when off, blue when on
+-two-tone settings cards (built-in tab: sound + search)
+-markdown tables render as neat grids in replies
+-fix firefox/floorp cloud consent prompt (request permission synchronously) + grant button
+
+1.2.5
+-add web search function
+-adjust icons
+-repair firefox permission
+-markdown now working
+
+1.2.6
+-ability to move tool position
