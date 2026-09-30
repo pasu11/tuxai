@@ -2,19 +2,39 @@
 # Upload TuxAI to GitHub: commit, push, then create a tagged GitHub release.
 #
 # Usage:
-#   scripts/upload.sh                 # commit + push + release
-#   scripts/upload.sh diff            # show diff first, then commit + push + release
-#   scripts/upload.sh --no-release    # commit + push only (skip the release)
+#   scripts/gitupload.sh                 # commit + push + release
+#   scripts/gitupload.sh diff            # show diff first, then commit + push + release
+#   scripts/gitupload.sh --no-release    # commit + push only (skip the release)
 #
-# The release tag is derived from the version in package.json (e.g. "v1.2.7").
-# The release body is generated from commit subjects since the previous tag.
+# The release tag is derived from the version in package.json (e.g. "1.2.7").
+# The release body is taken from the matching version section of "what's news.txt",
+# falling back to commit subjects since the previous tag if there is no section.
 # dist/tuxai.crx and dist/tuxai.xpi are attached as release assets when present.
+# Auth comes from GITHUB_TOKEN (environment, or the gitignored .env file); the
+# token is never written into .git/config.
 # Requires: git, jq, curl. Run `npm run package` beforehand to refresh dist/.
 
 set -u
 
 # Run from the repository root (this script lives in scripts/).
 cd "$(dirname "$0")/.." || exit 1
+
+# GitHub token: prefer the environment, else the gitignored .env file.
+if [ -z "${GITHUB_TOKEN:-}" ] && [ -f .env ]; then
+	set -a
+	. ./.env
+	set +a
+fi
+export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+
+# Use the token for git pull/push without storing it in .git/config.
+git_auth() {
+	if [ -n "$GITHUB_TOKEN" ]; then
+		git -c credential.helper='!f(){ echo username=x-access-token; echo password="$GITHUB_TOKEN"; };f' "$@"
+	else
+		git "$@"
+	fi
+}
 
 DO_RELEASE=1
 SHOW_DIFF=0
@@ -45,10 +65,10 @@ echo "========= commit ======"
 git commit -m "upload time: $t"
 sleep 1
 echo "========= pull ======"
-git pull
+git_auth pull
 sleep 1
 echo "========= push ======"
-if ! git push origin main; then
+if ! git_auth push origin main; then
 	echo "!! push failed — skipping release"
 	exit 1
 fi
@@ -84,13 +104,12 @@ for f in manifest.json manifest.firefox.json; do
 	fi
 done
 
-TAG="v$VERSION"
-REMOTE_URL=$(git remote get-url origin)
-TOKEN=$(printf '%s' "$REMOTE_URL" | sed -E 's#^https://[^:]+:([^@]+)@.*#\1#')
-REPO=$(printf '%s' "$REMOTE_URL" | sed -E 's#.*github\.com[:/]##; s#/+#/#g; s#^/##; s#/+$##; s#\.git$##')
+TAG="$VERSION"
+REPO=$(git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#/+#/#g; s#^/##; s#/+$##; s#\.git$##')
+TOKEN="$GITHUB_TOKEN"
 
-if [ -z "$TOKEN" ] || [ "$TOKEN" = "$REMOTE_URL" ]; then
-	echo "!! no token found in origin remote — skipping release"
+if [ -z "$TOKEN" ]; then
+	echo "!! GITHUB_TOKEN is not set (export it or put it in .env) — skipping release"
 	echo "========== Done ============="
 	exit 0
 fi
@@ -98,24 +117,35 @@ fi
 echo "version: $VERSION   tag: $TAG   repo: $REPO"
 
 # Already released? Do nothing.
-if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+if git_auth ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
 	echo "tag $TAG already exists on origin — nothing to release"
 	echo "========== Done ============="
 	exit 0
 fi
 
-# Release notes from commit subjects since the previous tag.
-PREV=$(git describe --tags --abbrev=0 2>/dev/null)
-if [ -n "$PREV" ]; then
-	NOTES=$(git log --pretty='- %s' "$PREV"..HEAD)
-else
-	NOTES=$(git log --pretty='- %s')
+# Release notes: the section for this version in "what's news.txt"
+# (from the version line until the next version line), falling back to commit subjects.
+NEWS_FILE="what's news.txt"
+NOTES=$(awk -v ver="$VERSION" '
+	{ line=$0; sub(/[ \t\r]+$/, "", line); sub(/^[ \t]+/, "", line) }
+	line == ver { capture=1; next }
+	capture && line ~ /^[0-9]+\.[0-9]+(\.[0-9]+)?$/ { exit }
+	capture { print }
+' "$NEWS_FILE")
+NOTES=$(printf '%s\n' "$NOTES" | sed -E '/^[[:space:]]*$/d')
+if [ -z "$NOTES" ]; then
+	PREV=$(git describe --tags --abbrev=0 2>/dev/null)
+	if [ -n "$PREV" ]; then
+		NOTES=$(git log --pretty='- %s' "$PREV"..HEAD)
+	else
+		NOTES=$(git log --pretty='- %s')
+	fi
 fi
 [ -z "$NOTES" ] && NOTES="- TuxAI $TAG"
 
 echo "========= tag ======"
 git tag -a "$TAG" -m "TuxAI $TAG"
-if ! git push origin "$TAG"; then
+if ! git_auth push origin "$TAG"; then
 	echo "!! failed to push tag $TAG"
 	echo "========== Done ============="
 	exit 0
