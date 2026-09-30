@@ -6,3 +6,4 @@ backups/
 # Local-only secrets
 .env
 .env.*
+.sh

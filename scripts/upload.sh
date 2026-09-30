@@ -145,7 +145,7 @@ fi
 
 echo "========= tag ======"
 git tag -a "$TAG" -m "TuxAI $TAG"
-if ! git push origin "$TAG"; then
+if ! git_auth push origin "$TAG"; then
 	echo "!! failed to push tag $TAG"
 	echo "========== Done ============="
 	exit 0
