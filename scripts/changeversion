@@ -54,13 +54,14 @@ fi
 sed -i -E "s/(\"version\":\s*\")[^\"]+(\")/\1${NEW_VERSION}\2/" "$FILE"
 sed -i -E "s/(\"version\":\s*\")[^\"]+(\")/\1${NEW_VERSION}\2/" "$FILE2"
 sed -i -E "s/(\"version\":\s*\")[^\"]+(\")/\1${NEW_VERSION}\2/" "$FILE3"
-
+sh package.sh
 zenity --info \
     --title="Version Updated" \
-    --text="✓ Version updated to <b>$NEW_VERSION</b>\n\nFiles updated:\n  • $FILE\n  • $FILE2\n  • $FILE3" \
+    --text="✓ Version updated to <b>$NEW_VERSION</b>\n\nFiles updated:\n  • $FILE\n  • $FILE2\n  • $FILE3 \n\n Packaging Done!"\ 
     --width=350
 
 echo "✓ Version updated to $NEW_VERSION in:"
 echo "  - $FILE"
 echo "  - $FILE2"
 echo "  - $FILE3"
+echo "packaging done"
