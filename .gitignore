@@ -2,9 +2,8 @@
 # These contain API keys in plaintext, so they must never be committed.
 tuxai-backup-*.json
 backups/
-
+scripts/*.sh
 
 # Local-only secrets
 .env
 .env.*
-*.sh
