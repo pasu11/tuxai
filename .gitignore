@@ -7,3 +7,8 @@ scripts/*.sh
 # Local-only secrets
 .env
 .env.*
+changeversion.sh
+git-credential-tuxai
+gitupload.sh
+package.sh
+what does build.mjs do.txt
