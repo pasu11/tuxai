@@ -3,7 +3,8 @@
 tuxai-backup-*.json
 backups/
 
+
 # Local-only secrets
 .env
 .env.*
-.sh
+*.sh
