@@ -1505,10 +1505,14 @@ body.settings-open .history-panel {
 }
 
 .attachment-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  font: inherit;
   font-size: 14px;
   line-height: 1;
   padding: 0;
@@ -1993,6 +1997,9 @@ body.settings-open .history-panel {
 }
 
 .model-manager-row .model-manager-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
@@ -2021,11 +2028,11 @@ body.settings-open .history-panel {
 
 /* ---------- Web search ---------- */
 
-/* Globe button next to the model chip. Red = search disabled, blue = enabled. */
+/* Globe button next to the model chip. Icon only (no bubble). Red = search disabled, blue = enabled. */
 .composer-icon-btn.web-search-btn {
   color: var(--danger);
-  border-color: var(--danger);
-  background: var(--danger-soft);
+  border: none;
+  background: transparent;
 }
 
 .composer-icon-btn.web-search-btn svg {
@@ -2035,15 +2042,15 @@ body.settings-open .history-panel {
 
 .composer-icon-btn.web-search-btn:hover {
   color: var(--danger);
-  border-color: var(--danger);
-  background: var(--danger-soft);
+  border: none;
+  background: transparent;
 }
 
 .composer-icon-btn.web-search-btn.active,
 .composer-icon-btn.web-search-btn.active:hover {
   color: var(--blue);
-  border-color: var(--blue);
-  background: rgba(14, 165, 233, 0.14);
+  border: none;
+  background: transparent;
 }
 
 .search-check {

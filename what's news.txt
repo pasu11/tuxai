@@ -38,3 +38,6 @@
 
 1.2.6
 -ability to move tool position
+
+1.2.7
+icons fix

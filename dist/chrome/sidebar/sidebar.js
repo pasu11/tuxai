@@ -1939,7 +1939,8 @@ async function renderServerModelManager(type) {
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "model-manager-remove";
-      removeBtn.textContent = "×";
+      removeBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="M6 6l12 12"></path></svg>';
       removeBtn.title = "Remove custom model";
       removeBtn.setAttribute("aria-label", `Remove custom model ${model}`);
       removeBtn.addEventListener("click", () => {
@@ -2197,7 +2198,8 @@ async function renderCloudModelManager(provider) {
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "model-manager-remove";
-      removeBtn.textContent = "×";
+      removeBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="M6 6l12 12"></path></svg>';
       removeBtn.title = "Remove custom model";
       removeBtn.setAttribute("aria-label", `Remove custom model ${model}`);
       removeBtn.addEventListener("click", () => {
@@ -5604,7 +5606,8 @@ function renderAttachmentList() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "attachment-chip-remove";
-    remove.textContent = "×";
+    remove.innerHTML =
+      '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="M6 6l12 12"></path></svg>';
     remove.title = "Remove attachment";
     remove.addEventListener("click", () => {
       removeAttachment(attachment.id);
