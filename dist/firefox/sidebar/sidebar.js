@@ -784,6 +784,9 @@ function bindEvents() {
     closeToolModelMenu();
     closeManageToolMenu();
     if (!dom.historyPanel.hidden) hideHistoryPanel();
+    // Escape dismisses the selected-text bubble (clicking the space above it
+    // does the same via the chat listener below).
+    if (!dom.selectionPanel.hidden) clearSelectedText();
   });
   // Clicking the page or browser chrome moves focus away from this document,
   // which the document click handler cannot see; close open dropdowns on blur.
@@ -858,6 +861,12 @@ function bindEvents() {
       if (notice && notice.message) appendSystemMessage(notice.message);
       api.storage.local.remove([NOTICE_KEY]);
     }
+  });
+
+  // Clicking the empty space above the selected-text bubble (the chat area)
+  // dismisses the bubble, mirroring Escape.
+  dom.chat.addEventListener("click", () => {
+    if (!dom.selectionPanel.hidden) clearSelectedText();
   });
 
   dom.chat.addEventListener(
