@@ -8,7 +8,7 @@ It provides:
 - Local LLM server support (Ollama, kobold.cpp, llama.cpp, or any OpenAI-compatible server)
 - Cloud API support (DeepSeek, OpenAI, Anthropic Claude, Google Gemini, Mistral, Cohere, plus custom OpenAI-compatible providers)
 - Plain text selection that automatically sends selected text to the sidebar
-- A configurable quick-select shortcut that opens a floating popup with tool buttons
+- A configurable quick-select shortcut that opens a floating popup with tool buttons, and can write a tool's result back over the original selection when that selection was inside an editable field
 - Right-click context menu for running tools on selected text
 - Reusable tools (system-prompt presets) with built-in defaults and full create/edit/delete support
 - Text-to-speech (read assistant replies aloud, in the sidebar or the page popup)
@@ -224,7 +224,7 @@ By default, holding **Alt** while selecting text opens a small popup:
 1. Select text while holding **Alt** (or another configured shortcut).
 2. The TuxAI popup appears.
 3. Click a tool, for example **translate** or **summarize**.
-4. The result is shown directly in the popup. The popup can be dragged by its title bar, and the result can be selected and copied.
+4. The result is shown directly in the popup, which opens below the selection (and flips above it when there is not enough room) so it does not cover the text. The popup can be dragged by its title bar, and the result can be selected and copied. When the text was selected inside an editable field (a text box, textarea, or contenteditable area), an extra **replace** icon applies the result over the original selection. For plain text boxes and textareas the same icon then restores the original text; rich-text editors only get the replace action because their internal selection cannot be restored reliably. Once the source has been replaced the action is spent: for text boxes the icon becomes **restore** (and returns to replace after restoring), while for rich-text editors it greys out and stops responding so the stale source is never applied twice.
 
 You can change the shortcut (Alt, Ctrl, Shift, and combinations) or disable the popup under:
 

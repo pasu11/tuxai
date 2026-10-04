@@ -41,3 +41,13 @@
 
 1.2.7
 icons fix
+
+1.2.8
+selection bubble exit adjustment
+
+
+1.2.9
+add replace function for text box
+repair popup location so it doesn't block text.
+
+

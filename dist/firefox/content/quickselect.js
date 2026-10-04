@@ -41,6 +41,9 @@
   let popupTitle = null;
   let popupToolList = [];
   let popupSelectedText = "";
+  // Where an editable selection came from, so a tool result can be written
+  // back over the exact original range. Set only for the quick popup flow.
+  let popupSelectionSource = null;
   let lastAutoSentKey = "";
   let lastAutoSentAt = 0;
   let autoSentActive = false;
@@ -53,6 +56,9 @@
   let popupSpeakButton = null;
   let popupSpeakAnimation = null;
   let popupPinned = false;
+  let popupAnchorRect = null;
+  let popupAutoPosition = true;
+  let popupSourceReplaced = false;
 
   function normalizeShortcut(value) {
     return SHORTCUT_MODES.has(value) ? value : "alt";
@@ -144,6 +150,154 @@
     }
   }
 
+  // Resolve the real event target, unwrapping open shadow roots so editable
+  // fields inside web components can be detected.
+  function resolveEventTarget(event) {
+    try {
+      if (event && typeof event.composedPath === "function") {
+        const path = event.composedPath();
+        if (path && path.length && path[0] && path[0].nodeType === 1) {
+          return path[0];
+        }
+      }
+    } catch (error) {
+      // Fall through to the retargeted target.
+    }
+    return event ? event.target : null;
+  }
+
+  function findContentEditableHost(el) {
+    if (!el || !el.isContentEditable) return null;
+    let host = el;
+    try {
+      while (host.parentElement && host.parentElement.isContentEditable) {
+        host = host.parentElement;
+      }
+    } catch (error) {
+      // Keep the deepest host found so far.
+    }
+    return host;
+  }
+
+  // Remember where an editable selection came from. Plain page text returns
+  // `{ kind: "none" }`, so the replace action stays hidden for it.
+  function captureSelectionSource(target) {
+    try {
+      const targetEl =
+        target && target.nodeType === 1
+          ? target
+          : target && target.parentElement
+            ? target.parentElement
+            : null;
+
+      const targetField =
+        targetEl &&
+        (targetEl.tagName === "INPUT" || targetEl.tagName === "TEXTAREA")
+          ? targetEl
+          : null;
+
+      const activeEl = document.activeElement;
+      const field =
+        targetField ||
+        (activeEl &&
+        (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA")
+          ? activeEl
+          : null);
+
+      if (field) {
+        if (
+          field.tagName === "INPUT" &&
+          String(field.type).toLowerCase() === "password"
+        ) {
+          return { kind: "none" };
+        }
+        const start = field.selectionStart;
+        const end = field.selectionEnd;
+        if (
+          typeof start !== "number" ||
+          typeof end !== "number" ||
+          start === end
+        ) {
+          return { kind: "none" };
+        }
+        const value = typeof field.value === "string" ? field.value : "";
+        const from = Math.min(start, end);
+        const to = Math.max(start, end);
+        const raw = value.slice(from, to);
+        if (!raw.trim()) return { kind: "none" };
+        return { kind: "field", element: field, start: from, end: to, raw };
+      }
+
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount < 1) {
+        return { kind: "none" };
+      }
+      // Anchor the rich-text source to the selection itself, so a leftover
+      // focused contenteditable can never claim a plain page selection.
+      const anchor =
+        selection.anchorNode || selection.getRangeAt(0).commonAncestorContainer;
+      const anchorEl =
+        anchor && anchor.nodeType === 1
+          ? anchor
+          : anchor
+            ? anchor.parentElement
+            : null;
+      const host =
+        anchorEl && anchorEl.isContentEditable
+          ? findContentEditableHost(anchorEl)
+          : null;
+
+      if (host) {
+        const range = selection.getRangeAt(0).cloneRange();
+        const raw = range.toString();
+        if (!raw.trim()) return { kind: "none" };
+        return { kind: "richtext", element: host, range, raw };
+      }
+
+      return { kind: "none" };
+    } catch (error) {
+      return { kind: "none" };
+    }
+  }
+
+  // A viewport rect for the current selection, used to keep the popup off the
+  // selected text. Field selections use the field box; everything else uses
+  // the range box. Returns null when no rect can be measured.
+  function captureSelectionRect(target, source) {
+    try {
+      if (source && source.kind === "field" && source.element) {
+        return source.element.getBoundingClientRect();
+      }
+      if (source && source.kind === "richtext" && source.range) {
+        const rect = source.range.getBoundingClientRect();
+        if (rect && (rect.width || rect.height)) return rect;
+      }
+      const targetEl =
+        target && target.nodeType === 1
+          ? target
+          : target && target.parentElement
+            ? target.parentElement
+            : null;
+      const field =
+        targetEl &&
+        (targetEl.tagName === "INPUT" || targetEl.tagName === "TEXTAREA")
+          ? targetEl
+          : null;
+      if (field) {
+        const rect = field.getBoundingClientRect();
+        if (rect && (rect.width || rect.height)) return rect;
+      }
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount && !selection.isCollapsed) {
+        const rect = selection.getRangeAt(0).getBoundingClientRect();
+        if (rect && (rect.width || rect.height)) return rect;
+      }
+    } catch (error) {
+      // No-op.
+    }
+    return null;
+  }
+
   function sendSelectedText(text) {
     const now = Date.now();
     if (text === lastAutoSentKey && now - lastAutoSentAt < 3000) return;
@@ -186,6 +340,10 @@
     popupToolList = [];
     popupSelectedText = "";
     popupResultText = "";
+    popupSelectionSource = null;
+    popupAnchorRect = null;
+    popupAutoPosition = true;
+    popupSourceReplaced = false;
   }
 
   // Auto-dismiss (outside click, Escape, window blur) is suppressed while the
@@ -209,6 +367,16 @@
       '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
     copied:
       '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+  };
+
+  const REPLACE_ICONS = {
+    replace:
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 10 4 15 9 20"></polyline><path d="M20 4v7a4 4 0 0 1-4 4H4"></path></svg>',
+    replaced:
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+    failed:
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
+    undo: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>',
   };
 
   const PIN_PATH =
@@ -395,6 +563,328 @@
     }
   }
 
+  // The replace action is offered only for an editable source that is still
+  // connected and still holds the original text.
+  function isSourceUsable(source) {
+    if (!source || source.kind === "none") return false;
+    if (source.kind === "field") {
+      const field = source.element;
+      if (!field || !field.isConnected) return false;
+      const value = typeof field.value === "string" ? field.value : "";
+      if (value.slice(source.start, source.end) === source.raw) return true;
+      return value.indexOf(source.raw) >= 0;
+    }
+    if (source.kind === "richtext") {
+      const range = source.range;
+      return Boolean(
+        source.element &&
+          source.element.isConnected &&
+          range &&
+          range.startContainer &&
+          range.endContainer &&
+          range.startContainer.isConnected &&
+          range.endContainer.isConnected
+      );
+    }
+    return false;
+  }
+
+  // Focus the field and take over its native selection so the browser edit
+  // lands in the original range. execCommand keeps the native undo stack and
+  // fires an input event; the value-setter fallback keeps frameworks
+  // (React/Vue) in sync and is used when execCommand is unavailable.
+  function insertIntoField(field, start, end, text) {
+    if (!field || !field.isConnected) return false;
+    try {
+      field.focus({ preventScroll: true });
+    } catch (error) {
+      try {
+        field.focus();
+      } catch (inner) {
+        return false;
+      }
+    }
+    try {
+      field.setSelectionRange(start, end);
+    } catch (error) {
+      return false;
+    }
+
+    let ok = false;
+    try {
+      ok = document.execCommand("insertText", false, text);
+    } catch (error) {
+      ok = false;
+    }
+    if (ok) return true;
+
+    try {
+      const proto =
+        field.tagName === "TEXTAREA"
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+      const value = typeof field.value === "string" ? field.value : "";
+      const next = value.slice(0, start) + text + value.slice(end);
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(field, next);
+      } else {
+        field.value = next;
+      }
+      try {
+        field.setSelectionRange(start, start + text.length);
+      } catch (error) {
+        // No-op.
+      }
+      field.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertReplacementText",
+          data: text,
+        })
+      );
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Insert `text` over `range` in a contenteditable host. Returns true on
+  // success. Restore is intentionally not supported for rich text: editors
+  // with their own selection model can ignore a programmatic selection and
+  // append instead of replacing, which is what made the old undo corrupt text.
+  function insertIntoRichText(host, range, text) {
+    if (!range || !range.startContainer || !range.startContainer.isConnected) {
+      return false;
+    }
+    try {
+      host.focus({ preventScroll: true });
+    } catch (error) {
+      // No-op.
+    }
+    const selection = window.getSelection();
+    if (!selection) return false;
+    try {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (error) {
+      return false;
+    }
+
+    let ok = false;
+    try {
+      ok = document.execCommand("insertText", false, text);
+    } catch (error) {
+      ok = false;
+    }
+    if (ok) return true;
+
+    try {
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try {
+        host.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertReplacementText",
+            data: text,
+          })
+        );
+      } catch (error) {
+        // No-op.
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Write a tool result over the captured selection. Returns an undo handle on
+  // success, or `null` when the source is gone or no longer matches.
+  function applyResultToSource(source, text) {
+    const value = String(text || "");
+    if (!isSourceUsable(source) || !value) return null;
+
+    if (source.kind === "field") {
+      const field = source.element;
+      const current = typeof field.value === "string" ? field.value : "";
+      let start = source.start;
+      let end = source.end;
+      if (current.slice(start, end) !== source.raw) {
+        const found = current.indexOf(source.raw);
+        if (found < 0) return null;
+        start = found;
+        end = found + source.raw.length;
+      }
+      if (!insertIntoField(field, start, end, value)) return null;
+      return {
+        kind: "field",
+        element: field,
+        originalRaw: source.raw,
+        start,
+        insertedText: value,
+      };
+    }
+
+    if (source.kind === "richtext") {
+      if (!insertIntoRichText(source.element, source.range, value)) return null;
+      return {
+        kind: "richtext",
+        element: source.element,
+        originalRaw: source.raw,
+      };
+    }
+
+    return null;
+  }
+
+  function revertAppliedResult(handle) {
+    if (!handle) return false;
+
+    if (handle.kind === "field") {
+      const field = handle.element;
+      if (!field || !field.isConnected) return false;
+      const current = typeof field.value === "string" ? field.value : "";
+      const start = handle.start;
+      const end = start + handle.insertedText.length;
+      if (current.slice(start, end) !== handle.insertedText) return false;
+      return insertIntoField(field, start, end, handle.originalRaw);
+    }
+
+    // Restore is only reliable for plain input/textarea fields. A rich text
+    // editor can ignore a programmatic selection and insert at its own caret.
+    return false;
+  }
+
+  function createReplaceIconButton(getText, getSource) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-tuxai-replace", "1");
+    button.title = t("popup.replace", "Replace original");
+    Object.assign(button.style, {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "28px",
+      height: "28px",
+      padding: "0",
+      background: "#1e293b",
+      color: "#e2e8f0",
+      border: "1px solid #334155",
+      borderRadius: "8px",
+      cursor: "pointer",
+      boxSizing: "border-box",
+    });
+    button.innerHTML = REPLACE_ICONS.replace;
+
+    let handle = null;
+    let timer = null;
+
+    const clearTimer = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const showIdle = () => {
+      button.disabled = false;
+      button.style.cursor = "pointer";
+      button.style.background = "#1e293b";
+      button.style.borderColor = "#334155";
+      button.style.color = "#e2e8f0";
+      button.innerHTML = REPLACE_ICONS.replace;
+      button.title = t("popup.replace", "Replace original");
+    };
+
+    const showUndo = () => {
+      button.style.background = "#0f766e";
+      button.style.borderColor = "#0f766e";
+      button.style.color = "#ffffff";
+      button.innerHTML = REPLACE_ICONS.undo;
+      button.title = t("popup.undoReplace", "Restore original");
+    };
+
+    const showSuccess = (titleKey, fallback) => {
+      button.style.background = "#0f766e";
+      button.style.borderColor = "#0f766e";
+      button.style.color = "#ffffff";
+      button.innerHTML = REPLACE_ICONS.replaced;
+      button.title = t(titleKey, fallback);
+    };
+
+    const showFailure = (titleKey, fallback) => {
+      button.style.background = "#7f1d1d";
+      button.style.borderColor = "#7f1d1d";
+      button.style.color = "#ffffff";
+      button.innerHTML = REPLACE_ICONS.failed;
+      button.title = t(titleKey, fallback);
+      clearTimer();
+      timer = setTimeout(() => {
+        if (handle) showUndo();
+        else showIdle();
+      }, 1400);
+    };
+
+    // Once the (unrestorable) rich-text source has been applied, the action is
+    // spent: show it greyed out instead of letting it write a second time.
+    const showDisabled = () => {
+      button.disabled = true;
+      button.style.background = "#1e293b";
+      button.style.borderColor = "#334155";
+      button.style.color = "#475569";
+      button.style.cursor = "default";
+      button.innerHTML = REPLACE_ICONS.replace;
+      button.title = t("popup.alreadyReplaced", "Already replaced");
+    };
+
+    button.addEventListener("click", (event) => {
+      // Do not let the parent bubble toggle when the replace button is clicked.
+      event.stopPropagation();
+      clearTimer();
+
+      if (handle) {
+        const reverted = revertAppliedResult(handle);
+        handle = null;
+        if (reverted) {
+          popupSourceReplaced = false;
+          showSuccess("popup.restored", "Restored");
+          timer = setTimeout(showIdle, 1400);
+        } else {
+          showFailure("popup.restoreFailed", "Restore failed");
+        }
+        return;
+      }
+
+      const applied = applyResultToSource(getSource(), getText());
+      if (!applied) {
+        showFailure("popup.replaceFailed", "Replace failed");
+        return;
+      }
+
+      popupSourceReplaced = true;
+
+      if (applied.kind === "field") {
+        handle = applied;
+        showSuccess("popup.replaced", "Replaced!");
+        timer = setTimeout(showUndo, 700);
+      } else {
+        // Restore is only reliable for input/textarea sources. Rich text shows
+        // the plain "replaced" state and then goes inactive, so the stale
+        // source is never applied a second time.
+        showSuccess("popup.replaced", "Replaced!");
+        timer = setTimeout(showDisabled, 1400);
+      }
+    });
+
+    return button;
+  }
+
   function createCopyIconButton(getText) {
     const button = document.createElement("button");
     button.type = "button";
@@ -462,13 +952,6 @@
     });
     for (const child of children) row.appendChild(child);
     return row;
-  }
-
-  function createBubbleActions(getText) {
-    return createBubbleActionRow([
-      createCopyIconButton(getText),
-      createSpeakIconButton(getText),
-    ]);
   }
 
   async function speakPopupText(text, button) {
@@ -616,8 +1099,10 @@
     return Math.min(Math.max(value, min), max);
   }
 
-  function createPopup(x, y, titleText) {
+  function createPopup(x, y, titleText, anchorRect) {
     closePopup();
+    popupAnchorRect = anchorRect || null;
+    popupAutoPosition = true;
 
     const el = document.createElement("div");
     el.setAttribute("data-tuxai-quick", "1");
@@ -739,27 +1224,43 @@
     }
 
     popupEl = el;
+    clampPopupToViewport();
   }
 
+  // Keep the popup off the selected text: prefer the space below the selection,
+  // flip above when there is not enough room, and align to the selection's left
+  // edge. After a manual drag (`popupAutoPosition === false`) it only clamps.
   function clampPopupToViewport() {
     if (!popupEl) return;
     const rect = popupEl.getBoundingClientRect();
-    const left = clamp(
-      rect.left,
-      4,
-      Math.max(4, window.innerWidth - rect.width - 4)
-    );
-    const top = clamp(
-      rect.top,
-      4,
-      Math.max(4, window.innerHeight - rect.height - 4)
-    );
-    popupEl.style.left = `${left}px`;
-    popupEl.style.top = `${top}px`;
+    const margin = 4;
+    const gap = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+
+    let left;
+    let top;
+    if (popupAutoPosition && popupAnchorRect) {
+      const anchor = popupAnchorRect;
+      left = anchor.left;
+      const spaceBelow = window.innerHeight - anchor.bottom;
+      if (spaceBelow >= rect.height + gap || spaceBelow >= anchor.top) {
+        top = anchor.bottom + gap;
+      } else {
+        top = anchor.top - rect.height - gap;
+      }
+    } else {
+      left = rect.left;
+      top = rect.top;
+    }
+
+    popupEl.style.left = `${clamp(left, margin, maxLeft)}px`;
+    popupEl.style.top = `${clamp(top, margin, maxTop)}px`;
   }
 
   function popupDragStart(event) {
     if (!popupEl || event.button !== 0) return;
+    popupAutoPosition = false;
     const rect = popupEl.getBoundingClientRect();
     popupDrag = {
       startX: event.clientX,
@@ -787,9 +1288,13 @@
     popupEl.style.top = `${top}px`;
   }
 
-  function renderToolList(tools, text) {
+  function renderToolList(tools, text, source) {
     popupToolList = tools;
     popupSelectedText = text;
+    if (source) {
+      popupSelectionSource = source;
+      popupSourceReplaced = false;
+    }
     popupTitle.textContent = t("popup.pickTool", "Pick a tool");
     popupContent.innerHTML = "";
 
@@ -946,9 +1451,9 @@
     clampPopupToViewport();
   }
 
-  function showToolPicker(tools, x, y, text) {
-    createPopup(x, y, t("popup.pickTool", "Pick a tool"));
-    renderToolList(tools, text);
+  function showToolPicker(tools, x, y, text, source, anchorRect) {
+    createPopup(x, y, t("popup.pickTool", "Pick a tool"), anchorRect);
+    renderToolList(tools, text, source);
   }
 
   function renderPopupActionRow() {
@@ -1027,7 +1532,20 @@
       cursor: "text",
     });
     result.appendChild(resultText);
-    result.appendChild(createBubbleActions(() => popupResultText));
+    // Replace is offered only on a successful tool result whose selection came
+    // from an editable target that is still present in the page.
+    const actions = [];
+    if (!popupSourceReplaced && isSourceUsable(popupSelectionSource)) {
+      actions.push(
+        createReplaceIconButton(
+          () => popupResultText,
+          () => popupSelectionSource
+        )
+      );
+    }
+    actions.push(createCopyIconButton(() => popupResultText));
+    actions.push(createSpeakIconButton(() => popupResultText));
+    result.appendChild(createBubbleActionRow(actions));
     popupContent.appendChild(result);
     popupContent.appendChild(renderPopupActionRow());
     clampPopupToViewport();
@@ -1107,17 +1625,17 @@
     }
   }
 
-  function showQuickPopup(x, y, text) {
+  function showQuickPopup(x, y, text, source, anchorRect) {
     try {
       api.runtime
         .sendMessage({ type: "penguin_get_tools" })
         .then((tools) => {
           if (!tools || !tools.length) {
-            createPopup(x, y, t("popup.error", "Error"));
+            createPopup(x, y, t("popup.error", "Error"), anchorRect);
             showPopupError(t("popup.noTools", "No tools available."));
             return;
           }
-          showToolPicker(tools, x, y, text);
+          showToolPicker(tools, x, y, text, source, anchorRect);
         })
         .catch(() => {});
     } catch (error) {
@@ -1205,14 +1723,22 @@
         closePopupIfUnpinned();
       }
 
-      const text = getSelectionText(event.target);
+      const targetEl = resolveEventTarget(event);
+      const text = getSelectionText(targetEl);
 
       if (!text) {
         closePopupIfUnpinned();
         clearSidebarSelection();
       } else if (matchesShortcut(event, shortcutMode)) {
         if (popupEl) return;
-        showQuickPopup(event.clientX, event.clientY, text);
+        const source = captureSelectionSource(targetEl);
+        showQuickPopup(
+          event.clientX,
+          event.clientY,
+          text,
+          source,
+          captureSelectionRect(targetEl, source)
+        );
         return;
       } else if (!hasAnyModifier(event)) {
         // Plain selection with no modifier → send to the side panel.
