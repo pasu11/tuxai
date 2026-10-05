@@ -49,5 +49,5 @@ selection bubble exit adjustment
 1.2.9
 add replace function for text box
 repair popup location so it doesn't block text.
-
+fix tool dropdown behaviour
 

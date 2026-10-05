@@ -2595,9 +2595,8 @@ function renderManageToolMenu() {
     text.textContent = tool.name;
     option.appendChild(text);
 
-    // Stops propagation because re-rendering the menu detaches this button,
-    // which would make the document click handler treat it as an outside click
-    // and close the menu.
+    // Stop propagation so the document click handler does not also treat this
+    // as an outside click; selecting a tool intentionally closes the menu.
     option.addEventListener("click", (event) => {
       event.stopPropagation();
       selectManageToolOption(tool.id);
@@ -2645,12 +2644,15 @@ function toggleManageToolMenu() {
   else closeManageToolMenu();
 }
 
-// Selecting keeps the menu open so the user can reorder right away.
+// Selecting a tool closes the menu (mirrors selectQuickModelOption).
 function selectManageToolOption(id) {
-  if (!id || id === state.editingToolId) return;
-  state.editingToolId = id;
-  renderManageFields();
-  renderManageToolMenu();
+  if (!id) return;
+  if (id !== state.editingToolId) {
+    state.editingToolId = id;
+    renderManageFields();
+    renderManageToolMenu();
+  }
+  closeManageToolMenu();
 }
 
 function renderManageFields() {
