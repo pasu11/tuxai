@@ -55,6 +55,7 @@
   let popupSource = null;
   let popupSpeakButton = null;
   let popupSpeakAnimation = null;
+  let popupSpeakLabel = null;
   let popupPinned = false;
   let popupAnchorRect = null;
   let popupAutoPosition = true;
@@ -421,7 +422,50 @@
     button.title = t("msg.readAloud", "Read aloud");
   }
 
+  // "Reading with <model>" pill shown while the popup is speaking, so the
+  // active TTS model is visible on the page.
+  function showPopupSpeakLabel(model) {
+    hidePopupSpeakLabel();
+    const text = String(model || "").trim();
+    if (!text) return;
+    const label = document.createElement("div");
+    label.setAttribute("data-tuxai-tts", "1");
+    label.textContent = `${t("msg.readingWith", "Reading with")} ${text}`;
+    Object.assign(label.style, {
+      position: "fixed",
+      left: "50%",
+      bottom: "14px",
+      transform: "translateX(-50%)",
+      zIndex: "2147483647",
+      maxWidth: "min(90vw, 360px)",
+      padding: "6px 12px",
+      borderRadius: "999px",
+      border: "1px solid #333333",
+      background: "#000000",
+      color: "#5eead4",
+      boxShadow: "0 10px 28px rgba(0, 0, 0, 0.6)",
+      fontFamily:
+        "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+      fontSize: "12px",
+      fontWeight: "600",
+      textAlign: "center",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      pointerEvents: "none",
+    });
+    document.body.appendChild(label);
+    popupSpeakLabel = label;
+  }
+
+  function hidePopupSpeakLabel() {
+    if (!popupSpeakLabel) return;
+    popupSpeakLabel.remove();
+    popupSpeakLabel = null;
+  }
+
   function stopPopupSpeech() {
+    hidePopupSpeakLabel();
     if (popupSource) {
       try {
         popupSource.stop();
@@ -981,6 +1025,7 @@
     button.disabled = true;
     button.title = t("popup.generating", "Generating speech...");
     startSpeakPulse(button);
+    let speakModel = "";
 
     const startUi = () => {
       button.disabled = false;
@@ -988,8 +1033,10 @@
       button.style.color = "#ffffff";
       button.innerHTML = SPEAK_ICONS.stop;
       button.title = t("msg.stopReading", "Stop reading");
+      showPopupSpeakLabel(speakModel);
     };
     const reset = () => {
+      hidePopupSpeakLabel();
       if (popupSpeakButton === button) {
         popupSpeakButton = null;
         popupAudio = null;
@@ -1027,6 +1074,7 @@
           (response && response.error) || t("popup.failed", "Text-to-speech failed.")
         );
       }
+      speakModel = response.model || "";
       if (popupSpeakButton !== button) {
         discardCtx();
         return;
@@ -1070,6 +1118,7 @@
         await audio.play();
       }
     } catch (error) {
+      hidePopupSpeakLabel();
       if (popupSpeakButton === button) {
         popupSpeakButton = null;
         popupAudio = null;

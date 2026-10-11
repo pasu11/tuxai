@@ -203,14 +203,26 @@
           <div class="settings-card-title" data-i18n="sound.title">Text to speech</div>
           <div class="field">
             <label for="tts-provider" data-i18n="sound.provider">TTS provider</label>
-            <select id="tts-provider"></select>
+            <div class="field-row">
+              <select id="tts-provider"></select>
+              <button id="add-tts-provider-btn" type="button" class="add-model-btn" title="Add TTS provider" aria-label="Add TTS provider" data-i18n-title="sound.addProvider" data-i18n-aria-label="sound.addProvider">+</button>
+              <button id="remove-tts-provider-btn" type="button" class="button button-ghost provider-remove-btn" hidden data-i18n="sound.removeProvider">Remove</button>
+            </div>
+            <div id="add-tts-provider-form" class="add-model-form" hidden>
+              <input id="add-tts-provider-name" type="text" placeholder="Provider name, e.g. Kokoro" autocomplete="off" spellcheck="false" data-i18n-placeholder="sound.providerNamePlaceholder" />
+              <input id="add-tts-provider-url" type="text" placeholder="http://localhost:5001" autocomplete="off" spellcheck="false" />
+              <button id="add-tts-provider-confirm" type="button" class="button button-secondary" data-i18n="sound.addProviderConfirm">Add</button>
+              <button id="add-tts-provider-cancel" type="button" class="button button-ghost" data-i18n="cloud.cancel">Cancel</button>
+            </div>
           </div>
           <div class="field">
             <label for="tts-model" data-i18n="sound.model">TTS model</label>
             <div class="field-row">
-              <input id="tts-model" type="text" placeholder="e.g. gpt-4o-mini-tts, tts-1" spellcheck="false" />
+              <input id="tts-model" type="text" list="tts-model-list" placeholder="e.g. gpt-4o-mini-tts, tts-1" spellcheck="false" />
               <button id="tts-apply-model" type="button" class="button button-secondary" data-i18n="sound.use">Use</button>
+              <button id="tts-fetch" type="button" class="button button-secondary fetch-btn" data-i18n="sound.fetch">Fetch</button>
             </div>
+            <datalist id="tts-model-list" hidden></datalist>
           </div>
           <div class="field">
             <label for="tts-url"><span data-i18n="sound.apiUrl">TTS API URL</span> <small data-i18n="sound.optionalOverride">(optional override)</small></label>
@@ -224,34 +236,26 @@
             <label for="tts-voice" data-i18n="sound.voice">Voice</label>
             <div class="field-row">
               <select id="tts-voice"></select>
+              <input id="tts-voice-manual" type="text" placeholder="voice" autocomplete="off" spellcheck="false" hidden />
               <button id="tts-test-voice" type="button" class="button button-secondary" data-i18n="sound.test">Test</button>
             </div>
+          </div>
+          <p id="tts-active-model" class="hint"></p>
+          <div class="tool-actions">
+            <button id="tts-reset" type="button" class="button button-ghost" data-i18n="sound.reset">Reset</button>
           </div>
         </div>
 
         <div class="settings-card">
-          <div class="settings-card-title" data-i18n="search.title">Web search</div>
-          <p class="hint" data-i18n="search.toggleHint">Use the globe button next to the model picker above the chat to allow or disallow web search. It is red when off and blue when on, and off by default; when it is on, the model decides on its own when it needs to search.</p>
-          <label class="search-check">
+          <div class="settings-card-title" data-i18n="search.title" data-i18n-tooltip="search.toggleTip">Web search</div>
+          <label class="search-check" data-i18n-tooltip="search.fetchPagesTip">
             <input id="web-search-fetch-pages" type="checkbox" />
             <span data-i18n="search.fetchPages">Also read the top result pages for better answers</span>
           </label>
-          <label class="search-check">
+          <label class="search-check" data-i18n-tooltip="search.nativeOpenaiTip">
             <input id="web-search-native" type="checkbox" />
             <span data-i18n="search.nativeOpenai">Use OpenAI's built-in web search when available (OpenAI only)</span>
           </label>
-          <p class="hint" data-i18n="search.hint">Queries go to DuckDuckGo, with Bing as a fallback when DuckDuckGo blocks the request; only OpenAI's native search uses your API key.</p>
-        </div>
-        <div class="settings-card">
-          <div class="settings-card-title" data-i18n="search.testTitle">Test search</div>
-          <div class="field">
-            <label for="web-search-test-query" data-i18n="search.testQuery">Query</label>
-            <input id="web-search-test-query" type="text" placeholder="Latest news about..." spellcheck="false" data-i18n-placeholder="search.testPlaceholder" />
-          </div>
-          <div class="tool-actions">
-            <button id="web-search-test-btn" type="button" class="button button-secondary" data-i18n="search.test">Test search</button>
-          </div>
-          <div id="web-search-test-result" class="search-test-result" hidden></div>
         </div>
       </div>
 

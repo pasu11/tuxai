@@ -789,6 +789,8 @@ async function runPopupToolRequest(toolId, text) {
 // ---------- Text to speech (quick popup) ----------
 
 const DEFAULT_TTS_VOICE = "alloy";
+// Matches the sidebar's "Local server" TTS preset id.
+const TTS_LOCAL_PROVIDER = "__local__";
 
 function isKnownTtsModel(model) {
   const name = String(model || "").trim().toLowerCase();
@@ -822,21 +824,64 @@ async function speakViaTts(text) {
     "penguin_tts_url",
     "penguin_tts_key",
     "penguin_tts_provider",
+    "penguin_custom_tts_providers",
   ];
   const stored = await api.storage.local.get(keys);
   const mode = stored.penguin_mode || "server";
   const manualUrl = String(stored.penguin_tts_url || "").trim();
   const manualKey = String(stored.penguin_tts_key || "").trim();
   const ttsProvider = String(stored.penguin_tts_provider || "").trim();
+  const customTtsProviders = Array.isArray(stored.penguin_custom_tts_providers)
+    ? stored.penguin_custom_tts_providers
+    : [];
+  const isCustomTts = customTtsProviders.some(
+    (item) => item && item.id === ttsProvider
+  );
 
   let baseUrl = "";
   let apiKey = "";
   let authRequired = true;
+  // Local/custom OpenAI-compatible endpoints accept any model/voice name.
+  let permissive = false;
 
   if (manualUrl) {
     baseUrl = manualUrl.replace(/\/+$/, "");
     apiKey = manualKey;
     authRequired = false;
+    permissive = true;
+  } else if (ttsProvider === TTS_LOCAL_PROVIDER) {
+    // Reuse the Local Server tab URL.
+    const type = stored.penguin_server_type || "ollama";
+    if (type === "ollama") {
+      return {
+        ok: false,
+        error: "Ollama does not expose a text-to-speech endpoint.",
+      };
+    }
+    const defaults = SERVER_DEFAULTS[type] || SERVER_DEFAULTS.koboldcpp;
+    const serverKeys = [`server_url_${type}`];
+    const serverStore = await api.storage.local.get(serverKeys);
+    baseUrl = String(serverStore[serverKeys[0]] || defaults.url || "").replace(
+      /\/+$/,
+      ""
+    );
+    authRequired = false;
+    if (!baseUrl) {
+      return {
+        ok: false,
+        error: "Set the local server URL to use text-to-speech.",
+      };
+    }
+    permissive = true;
+  } else if (isCustomTts) {
+    const custom = customTtsProviders.find((item) => item.id === ttsProvider);
+    baseUrl = String((custom && custom.url) || "").replace(/\/+$/, "");
+    apiKey = manualKey;
+    authRequired = false;
+    if (!baseUrl) {
+      return { ok: false, error: "Set the URL for this TTS provider." };
+    }
+    permissive = true;
   } else if (ttsProvider) {
     const kind = await getCloudProviderKind(ttsProvider);
     if (kind !== "openai") {
@@ -913,6 +958,7 @@ async function speakViaTts(text) {
       ""
     );
     authRequired = false;
+    permissive = true;
     if (!baseUrl) {
       return {
         ok: false,
@@ -924,6 +970,7 @@ async function speakViaTts(text) {
   let model = String(stored.penguin_tts_model || "").trim();
   if (!model) {
     if (manualUrl) model = "gpt-4o-mini-tts";
+    else if (ttsProvider === TTS_LOCAL_PROVIDER || isCustomTts) model = "tts-1";
     else if (ttsProvider) model = defaultTtsModel(ttsProvider);
     else if (mode === "cloud")
       model = defaultTtsModel(stored.cloud_provider || "deepseek");
@@ -931,7 +978,7 @@ async function speakViaTts(text) {
   }
   // Guards against the very common "gpt-40" (zero) / "gpt-4o" (letter o) typo.
   model = model.replace(/^gpt-40(?=[-_]|$)/i, "gpt-4o");
-  if (!isKnownTtsModel(model)) {
+  if (!permissive && !isKnownTtsModel(model)) {
     return {
       ok: false,
       error: `"${model}" is not recognized as a text-to-speech model.`,
@@ -969,6 +1016,7 @@ async function speakViaTts(text) {
   const contentType = response.headers.get("content-type") || "audio/mpeg";
   return {
     ok: true,
+    model,
     audio: `data:${contentType};base64,${arrayBufferToBase64(buffer)}`,
   };
 }
