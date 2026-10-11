@@ -114,6 +114,11 @@ const BUILT_IN_CLOUD_PROVIDERS = [
 ];
 
 const CUSTOM_CLOUD_PROVIDERS_KEY = "penguin_custom_cloud_providers";
+// Custom text-to-speech endpoints are kept separate from the chat cloud
+// providers: a TTS server (e.g. a local Kokoro-FastAPI) is not a chat model.
+const CUSTOM_TTS_PROVIDERS_KEY = "penguin_custom_tts_providers";
+// Built-in TTS provider id that reuses the Local Server tab URL.
+const TTS_LOCAL_PROVIDER = "__local__";
 
 const PENDING_KEY = "penguin_pending_run";
 const NOTICE_KEY = "penguin_notice";
@@ -126,6 +131,10 @@ const TTS_VOICE_KEY = "penguin_tts_voice";
 const TTS_URL_KEY = "penguin_tts_url";
 const TTS_KEY_KEY = "penguin_tts_key";
 const TTS_PROVIDER_KEY = "penguin_tts_provider";
+// Per-provider TTS memory: { "<providerId>": { model, voice, urlOverride, keyOverride } }.
+// Derived values (local server URL, custom endpoint URL, cloud URL/key) are
+// re-filled on every provider switch; only user-edited overrides are stored.
+const TTS_PROFILES_KEY = "penguin_tts_profiles";
 const DEFAULT_TTS_VOICE = "alloy";
 // Short sample used by the settings "Test" button.
 const TTS_TEST_SENTENCE = "ok";
@@ -211,6 +220,7 @@ const BACKUP_LOCAL_STORAGE_KEYS = [
   "penguin_tts_url",
   "penguin_tts_key",
   "penguin_tts_provider",
+  "penguin_custom_tts_providers",
   "penguin_interface_scale",
   "penguin_language",
   "penguin_settings_collapsed",
@@ -269,12 +279,24 @@ const dom = {
   textSize: document.getElementById("text-size"),
   resetTextSize: document.getElementById("reset-text-size"),
   ttsModel: document.getElementById("tts-model"),
+  ttsModelList: document.getElementById("tts-model-list"),
   ttsApplyModel: document.getElementById("tts-apply-model"),
+  ttsFetch: document.getElementById("tts-fetch"),
+  ttsActiveModel: document.getElementById("tts-active-model"),
   ttsProvider: document.getElementById("tts-provider"),
+  ttsAddProvider: document.getElementById("add-tts-provider-btn"),
+  ttsAddProviderForm: document.getElementById("add-tts-provider-form"),
+  ttsAddProviderName: document.getElementById("add-tts-provider-name"),
+  ttsAddProviderUrl: document.getElementById("add-tts-provider-url"),
+  ttsAddProviderConfirm: document.getElementById("add-tts-provider-confirm"),
+  ttsAddProviderCancel: document.getElementById("add-tts-provider-cancel"),
+  ttsRemoveProvider: document.getElementById("remove-tts-provider-btn"),
   ttsUrl: document.getElementById("tts-url"),
   ttsKey: document.getElementById("tts-key"),
   ttsVoice: document.getElementById("tts-voice"),
+  ttsVoiceManual: document.getElementById("tts-voice-manual"),
   ttsTestVoice: document.getElementById("tts-test-voice"),
+  ttsReset: document.getElementById("tts-reset"),
   interfaceScale: document.getElementById("interface-scale"),
   resetInterfaceScale: document.getElementById("reset-interface-scale"),
   quickShortcut: document.getElementById("quick-shortcut"),
@@ -326,15 +348,17 @@ const dom = {
   webSearchBtn: document.getElementById("web-search-btn"),
   webSearchFetchPages: document.getElementById("web-search-fetch-pages"),
   webSearchNativeOpenai: document.getElementById("web-search-native"),
-  webSearchTestBtn: document.getElementById("web-search-test-btn"),
-  webSearchTestQuery: document.getElementById("web-search-test-query"),
-  webSearchTestResult: document.getElementById("web-search-test-result"),
 };
 
 const state = {
   mode: localStorage.getItem("penguin_mode") || "server",
   serverType: localStorage.getItem("penguin_server_type") || "ollama",
   customCloudProviders: [],
+  customTtsProviders: [],
+  ttsProfiles: {},
+  activeTtsProvider: "",
+  pendingTtsVoice: "",
+  ttsInitialized: false,
   cloudStore: {},
   modelOptions: [],
   toolState: { customTools: [], overrides: {}, deleted: [], order: [] },
@@ -435,6 +459,7 @@ async function init() {
     Number.isFinite(savedTextSize) ? savedTextSize : DEFAULT_TEXT_SIZE
   );
   initTtsSettings();
+  state.customTtsProviders = await getCustomTtsProviders();
   await hydrateTtsSettingsFromStorage();
   await hydrateWebSearchSettings();
   bindWebSearchSettings();
@@ -469,6 +494,8 @@ async function init() {
   } else {
     await refreshUnifiedModelSelect();
   }
+  await loadTtsProfiles();
+  await initializeTtsSettings();
 
   renderChatFromState();
   renderAttachmentList();
@@ -517,6 +544,7 @@ function bindEvents() {
     localStorage.setItem("penguin_server_type", dom.serverType.value);
     await applyServerDefaults();
     await refreshUnifiedModelSelect();
+    syncDerivedTtsFields();
     applyTtsModel();
     if (state.mode === "server" && dom.serverUrl.value.trim()) {
       fetchServerModels({ silent: true });
@@ -526,6 +554,9 @@ function bindEvents() {
   dom.serverUrl.addEventListener("input", () => {
     const key = `server_url_${dom.serverType.value}`;
     api.storage.local.set({ [key]: dom.serverUrl.value });
+    if (dom.ttsProvider && dom.ttsProvider.value === TTS_LOCAL_PROVIDER) {
+      syncLocalTtsUrl();
+    }
   });
 
   dom.serverModel.addEventListener("input", () => {
@@ -668,21 +699,31 @@ function bindEvents() {
 
   dom.ttsModel.addEventListener("input", () => {
     saveTtsSetting(TTS_MODEL_KEY, dom.ttsModel.value.trim());
+    rememberTtsModel(dom.ttsModel.value.trim());
+    refreshActiveTtsModel();
   });
 
   dom.ttsProvider.addEventListener("change", () => {
-    saveTtsSetting(TTS_PROVIDER_KEY, dom.ttsProvider.value);
-    applyTtsModel();
+    handleTtsProviderChange();
   });
 
   dom.ttsUrl.addEventListener("input", () => {
-    saveTtsSetting(TTS_URL_KEY, dom.ttsUrl.value.trim());
+    rememberTtsEndpointFields();
+    saveTtsSetting(
+      TTS_URL_KEY,
+      ttsUrlOverrideFor(state.activeTtsProvider) || ""
+    );
+    refreshActiveTtsModel();
   });
 
   dom.ttsUrl.addEventListener("change", () => applyTtsModel());
 
   dom.ttsKey.addEventListener("input", () => {
-    saveTtsSetting(TTS_KEY_KEY, dom.ttsKey.value.trim());
+    rememberTtsEndpointFields();
+    saveTtsSetting(
+      TTS_KEY_KEY,
+      ttsKeyOverrideFor(state.activeTtsProvider) || ""
+    );
   });
 
   dom.ttsKey.addEventListener("change", () => applyTtsModel());
@@ -696,9 +737,27 @@ function bindEvents() {
 
   dom.ttsApplyModel.addEventListener("click", () => applyTtsModel());
 
+  if (dom.ttsFetch) {
+    dom.ttsFetch.addEventListener("click", () => fetchTtsSettingsManually());
+  }
+
+  if (dom.ttsReset) {
+    dom.ttsReset.addEventListener("click", () => resetTtsSettings());
+  }
+
   dom.ttsVoice.addEventListener("change", () => {
     saveTtsSetting(TTS_VOICE_KEY, dom.ttsVoice.value.trim());
+    rememberTtsVoice(dom.ttsVoice.value.trim());
   });
+
+  if (dom.ttsVoiceManual) {
+    dom.ttsVoiceManual.addEventListener("input", () => {
+      saveTtsSetting(TTS_VOICE_KEY, dom.ttsVoiceManual.value.trim());
+      rememberTtsVoice(dom.ttsVoiceManual.value.trim());
+    });
+  }
+
+  bindCustomTtsProviders();
 
   dom.ttsTestVoice.addEventListener("click", () => {
     if (activeSpeech && activeSpeech.button === dom.ttsTestVoice) {
@@ -727,6 +786,7 @@ function bindEvents() {
       if (typeof renderTools === "function") renderTools();
       renderTtsProviderOptions();
       applyTtsModel({ persist: false });
+      refreshActiveTtsModel();
     });
   }
 
@@ -923,12 +983,20 @@ function effectiveTtsModel() {
   const explicit = ttsModelValue();
   if (explicit) return explicit;
 
-  if (dom.ttsUrl && dom.ttsUrl.value.trim()) {
-    return "gpt-4o-mini-tts";
+  // Local/custom speech endpoints do not ship OpenAI model names; keep the
+  // neutral default and let the user type the model their server expects.
+  if (dom.ttsProvider && dom.ttsProvider.value) {
+    const value = dom.ttsProvider.value;
+    if (value === TTS_LOCAL_PROVIDER || isCustomTtsProvider(value)) {
+      return "tts-1";
+    }
+    return defaultTtsModel(value);
   }
 
-  if (dom.ttsProvider && dom.ttsProvider.value) {
-    return defaultTtsModel(dom.ttsProvider.value);
+  // A real dedicated-endpoint override (not an auto-filled derived URL)
+  // defaults to the best OpenAI TTS model.
+  if (dom.ttsUrl && ttsUrlOverrideFor("")) {
+    return "gpt-4o-mini-tts";
   }
 
   if (state.mode === "cloud") {
@@ -949,7 +1017,9 @@ function setTtsVoice(value) {
 }
 
 function showTtsVoiceUnsupported(reason) {
+  if (dom.ttsVoiceManual) dom.ttsVoiceManual.hidden = true;
   if (!dom.ttsVoice) return;
+  dom.ttsVoice.hidden = false;
   dom.ttsVoice.innerHTML = "";
   const option = document.createElement("option");
   option.value = "";
@@ -959,8 +1029,10 @@ function showTtsVoiceUnsupported(reason) {
   dom.ttsVoice.title = reason || "Text-to-speech is not supported.";
 }
 
-function populateTtsVoices(voices) {
+function populateTtsVoices(voices, preferred) {
   if (!dom.ttsVoice) return;
+  if (dom.ttsVoiceManual) dom.ttsVoiceManual.hidden = true;
+  dom.ttsVoice.hidden = false;
   dom.ttsVoice.innerHTML = "";
   for (const voice of voices) {
     const option = document.createElement("option");
@@ -971,13 +1043,39 @@ function populateTtsVoices(voices) {
   dom.ttsVoice.disabled = false;
   dom.ttsVoice.title = "";
 
-  const saved = localStorage.getItem(TTS_VOICE_KEY) || "";
-  const chosen = voices.includes(saved) ? saved : DEFAULT_TTS_VOICE;
+  const saved =
+    preferred !== undefined
+      ? String(preferred || "")
+      : localStorage.getItem(TTS_VOICE_KEY) || "";
+  // Custom/local servers rarely include "alloy", so fall back to the first
+  // voice the endpoint actually advertises.
+  const chosen = voices.includes(saved)
+    ? saved
+    : voices[0] || DEFAULT_TTS_VOICE;
   setTtsVoice(chosen);
+  rememberTtsVoice(chosen);
+}
+
+// Shown when a local/custom endpoint exposes no voice list: let the user type
+// any voice id instead of forcing the OpenAI voice set.
+function showTtsVoiceManual() {
+  if (dom.ttsVoiceManual) {
+    dom.ttsVoiceManual.hidden = false;
+    dom.ttsVoiceManual.value = localStorage.getItem(TTS_VOICE_KEY) || "";
+    dom.ttsVoiceManual.disabled = false;
+  }
+  if (dom.ttsVoice) {
+    dom.ttsVoice.hidden = true;
+    dom.ttsVoice.disabled = false;
+    dom.ttsVoice.title = "";
+  }
 }
 
 // Builds the "TTS provider" dropdown so speech can use a different provider
-// than the chat model (e.g. chat with DeepSeek, speak with OpenAI).
+// than the chat model (e.g. chat with DeepSeek, speak with OpenAI). Besides
+// the cloud providers it offers a "Local server" preset (reuses the Local
+// Server tab URL) and any custom OpenAI-compatible TTS endpoints the user
+// added, which are kept separate from the chat providers.
 function renderTtsProviderOptions(selected) {
   if (!dom.ttsProvider) return "";
   const current =
@@ -991,12 +1089,17 @@ function renderTtsProviderOptions(selected) {
   sameOption.textContent = t("sound.sameAsChat", "Same as chat provider");
   dom.ttsProvider.appendChild(sameOption);
 
+  const localOption = document.createElement("option");
+  localOption.value = TTS_LOCAL_PROVIDER;
+  localOption.textContent = t("sound.localServer", "Local server");
+  dom.ttsProvider.appendChild(localOption);
+
   const providers = [
     ...BUILT_IN_CLOUD_PROVIDERS.map((id) => ({
       id,
       label: cloudProviderLabel(id),
     })),
-    ...(state.customCloudProviders || []).map((item) => ({
+    ...(state.customTtsProviders || []).map((item) => ({
       id: item.id,
       label: item.name,
     })),
@@ -1008,14 +1111,44 @@ function renderTtsProviderOptions(selected) {
     dom.ttsProvider.appendChild(option);
   }
 
-  const valid = ["", ...providers.map((provider) => provider.id)];
+  const valid = ["", TTS_LOCAL_PROVIDER, ...providers.map((p) => p.id)];
   dom.ttsProvider.value = valid.includes(current) ? current : "";
+  state.activeTtsProvider = dom.ttsProvider.value;
+  if (dom.ttsRemoveProvider) {
+    dom.ttsRemoveProvider.hidden = !isCustomTtsProvider(dom.ttsProvider.value);
+  }
   return dom.ttsProvider.value;
+}
+
+// Fetch the voice ids a local/custom OpenAI-compatible endpoint advertises.
+// Kokoro-FastAPI serves GET /v1/audio/voices; endpoints that do not expose it
+// return null and the UI falls back to a free-text voice field.
+async function fetchTtsVoices(baseUrl, headers) {
+  if (!baseUrl) return null;
+  try {
+    const response = await fetch(`${baseUrl}/v1/audio/voices`, { headers });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray(data.voices)
+        ? data.voices
+        : Array.isArray(data.data)
+          ? data.data
+          : [];
+    return list
+      .map((voice) =>
+        typeof voice === "string" ? voice : voice && (voice.id || voice.name)
+      )
+      .filter(Boolean);
+  } catch (error) {
+    return null;
+  }
 }
 
 // Runs when the user clicks "Use" (or presses Enter) next to the TTS model
 // field: loads the supported voices, or reports that the model has no TTS.
-function applyTtsModel(options = {}) {
+async function applyTtsModel(options = {}) {
   const raw = dom.ttsModel ? dom.ttsModel.value : "";
   const explicit = normalizeTtsModelName(raw);
   if (dom.ttsModel && dom.ttsModel.value !== explicit) {
@@ -1024,25 +1157,47 @@ function applyTtsModel(options = {}) {
   // Always persist a corrected (auto-fixed) value, even on silent reloads.
   if (options.persist !== false || raw !== explicit) {
     saveTtsSetting(TTS_MODEL_KEY, explicit);
+    rememberTtsModel(explicit);
   }
 
   const provider = getTtsConfig();
   if (!provider.supported) {
     showTtsVoiceUnsupported(provider.reason);
     refreshSpeakButtons();
+    refreshActiveTtsModel();
     return;
   }
 
   const model = provider.model || effectiveTtsModel();
+  const preferred = localStorage.getItem(TTS_VOICE_KEY) || "";
+  const providerAtStart = state.activeTtsProvider;
+  if (provider.permissive) {
+    // Local/custom OpenAI-compatible endpoints accept any model name, so do
+    // not gate on the OpenAI voice table; ask the server for its voices first
+    // (Kokoro-FastAPI serves /v1/audio/voices), fall back to the OpenAI static
+    // list when the model looks like an OpenAI one, and finally to a free-text
+    // voice field when the server exposes no list at all.
+    const fetched = await fetchTtsVoices(provider.baseUrl, provider.headers);
+    if (state.activeTtsProvider !== providerAtStart) return;
+    const known = knownTtsVoices(model);
+    if (fetched && fetched.length) populateTtsVoices(fetched, preferred);
+    else if (known) populateTtsVoices(known, preferred);
+    else showTtsVoiceManual();
+    refreshSpeakButtons();
+    refreshActiveTtsModel();
+    return;
+  }
+
   const voices = knownTtsVoices(model);
   if (!voices) {
     showTtsVoiceUnsupported(
       `"${model}" is not recognized as a text-to-speech model.`
     );
   } else {
-    populateTtsVoices(voices);
+    populateTtsVoices(voices, preferred);
   }
   refreshSpeakButtons();
+  refreshActiveTtsModel();
 }
 
 function initTtsSettings() {
@@ -1205,60 +1360,6 @@ function bindWebSearchSettings() {
     });
   }
   syncWebSearchControls();
-
-  if (dom.webSearchTestBtn) {
-    dom.webSearchTestBtn.addEventListener("click", runWebSearchTest);
-  }
-  if (dom.webSearchTestQuery) {
-    dom.webSearchTestQuery.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        runWebSearchTest();
-      }
-    });
-  }
-}
-
-async function runWebSearchTest() {
-  if (!dom.webSearchTestResult) return;
-  const query = (dom.webSearchTestQuery?.value || "").trim();
-  if (!query) return;
-  dom.webSearchTestResult.hidden = false;
-  dom.webSearchTestResult.textContent = t("search.testing", "Searching...");
-  try {
-    const outcome = await searchForTool(query, { fetchPages: false, maxResults: 5 });
-    dom.webSearchTestResult.innerHTML = "";
-    const head = document.createElement("div");
-    head.className = "search-test-head";
-    head.textContent = `${t("search.engine", "Engine")}: ${outcome.engine} - ${
-      outcome.results.length
-    } ${t("search.results", "results")}`;
-    dom.webSearchTestResult.appendChild(head);
-    const list = document.createElement("ol");
-    list.className = "sources-list";
-    for (const result of outcome.results) {
-      const item = document.createElement("li");
-      const anchor = document.createElement("a");
-      anchor.href = result.url;
-      anchor.target = "_blank";
-      anchor.rel = "noopener noreferrer";
-      anchor.textContent = result.title || result.url;
-      item.appendChild(anchor);
-      if (result.snippet) {
-        const snippet = document.createElement("div");
-        snippet.className = "search-test-snippet";
-        snippet.textContent = result.snippet;
-        item.appendChild(snippet);
-      }
-      list.appendChild(item);
-    }
-    dom.webSearchTestResult.appendChild(list);
-  } catch (error) {
-    dom.webSearchTestResult.textContent = `${t(
-      "search.testFailed",
-      "Search failed"
-    )}: ${error && error.message ? error.message : error}`;
-  }
 }
 
 function applyInterfaceScale(value) {
@@ -1345,6 +1446,7 @@ function isBackupStorageKey(key) {
     "cloud_provider",
     "penguin_quick_shortcut",
     "penguin_custom_cloud_providers",
+    "penguin_custom_tts_providers",
     "penguin_custom_tools",
     "penguin_tool_overrides",
     "penguin_tool_deleted",
@@ -1356,6 +1458,7 @@ function isBackupStorageKey(key) {
     "penguin_tts_url",
     "penguin_tts_key",
     "penguin_tts_provider",
+    "penguin_tts_profiles",
     "penguin_language",
     WEB_SEARCH_ENABLED_KEY,
     WEB_SEARCH_FETCH_PAGES_KEY,
@@ -1995,6 +2098,571 @@ async function getCustomCloudProviders() {
 
 async function saveCustomCloudProviders(providers) {
   await api.storage.local.set({ [CUSTOM_CLOUD_PROVIDERS_KEY]: providers });
+}
+
+// ---------- Custom TTS providers ----------
+// A dedicated list so a local/custom speech endpoint never shows up as a chat
+// provider (and vice versa). Each entry is { id, name, url }.
+
+async function getCustomTtsProviders() {
+  try {
+    const result = await api.storage.local.get([CUSTOM_TTS_PROVIDERS_KEY]);
+    const list = Array.isArray(result[CUSTOM_TTS_PROVIDERS_KEY])
+      ? result[CUSTOM_TTS_PROVIDERS_KEY]
+      : [];
+    return list.filter(
+      (provider) => provider && provider.id && provider.name && provider.url
+    );
+  } catch (error) {
+    return [];
+  }
+}
+
+async function saveCustomTtsProviders(providers) {
+  await api.storage.local.set({ [CUSTOM_TTS_PROVIDERS_KEY]: providers });
+}
+
+function isCustomTtsProvider(provider) {
+  return (state.customTtsProviders || []).some((item) => item.id === provider);
+}
+
+// ---------- Per-provider TTS profiles ----------
+
+function ttsProviderLabel(provider) {
+  if (!provider) return t("sound.sameAsChat", "Same as chat provider");
+  if (provider === TTS_LOCAL_PROVIDER) {
+    return t("sound.localServer", "Local server");
+  }
+  const custom = (state.customTtsProviders || []).find(
+    (item) => item.id === provider
+  );
+  if (custom) return custom.name;
+  return cloudProviderLabel(provider);
+}
+
+// Endpoint implied by a provider before any user override. These are
+// recomputed on every provider switch ("auto-fill every time").
+function derivedTtsUrl(provider) {
+  if (provider === TTS_LOCAL_PROVIDER) {
+    return dom.serverUrl ? dom.serverUrl.value.trim().replace(/\/+$/, "") : "";
+  }
+  const custom = (state.customTtsProviders || []).find(
+    (item) => item.id === provider
+  );
+  if (custom) return String(custom.url || "").replace(/\/+$/, "");
+  const store = state.cloudStore || {};
+  if (provider) {
+    return String(
+      store[`cloud_api_url_${provider}`] ||
+        cloudProviderDefaults(provider).url ||
+        ""
+    ).replace(/\/+$/, "");
+  }
+  if (state.mode === "cloud") {
+    const chatProvider = dom.cloudProvider ? dom.cloudProvider.value : "";
+    return String(
+      store[`cloud_api_url_${chatProvider}`] ||
+        cloudProviderDefaults(chatProvider).url ||
+        ""
+    ).replace(/\/+$/, "");
+  }
+  return dom.serverUrl ? dom.serverUrl.value.trim().replace(/\/+$/, "") : "";
+}
+
+function derivedTtsKey(provider) {
+  const store = state.cloudStore || {};
+  if (provider === TTS_LOCAL_PROVIDER) return "";
+  const custom = (state.customTtsProviders || []).find(
+    (item) => item.id === provider
+  );
+  if (custom) return "";
+  if (provider) return String(store[`cloud_api_key_${provider}`] || "").trim();
+  if (state.mode === "cloud") {
+    const chatProvider = dom.cloudProvider ? dom.cloudProvider.value : "";
+    return String(store[`cloud_api_key_${chatProvider}`] || "").trim();
+  }
+  return "";
+}
+
+async function getTtsProfiles() {
+  try {
+    const result = await api.storage.local.get([TTS_PROFILES_KEY]);
+    const profiles = result[TTS_PROFILES_KEY];
+    return profiles && typeof profiles === "object" ? profiles : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function persistTtsProfiles() {
+  api.storage.local
+    .set({ [TTS_PROFILES_KEY]: state.ttsProfiles || {} })
+    .catch(() => {});
+}
+
+function currentTtsModelField() {
+  return dom.ttsModel ? dom.ttsModel.value.trim() : "";
+}
+
+function currentTtsVoiceField() {
+  const manual =
+    dom.ttsVoiceManual && !dom.ttsVoiceManual.hidden
+      ? dom.ttsVoiceManual.value.trim()
+      : "";
+  return manual || (dom.ttsVoice ? dom.ttsVoice.value.trim() : "");
+}
+
+function ttsUrlOverrideFor(provider) {
+  const value = dom.ttsUrl ? dom.ttsUrl.value.trim() : "";
+  return value && value !== derivedTtsUrl(provider) ? value : null;
+}
+
+function ttsKeyOverrideFor(provider) {
+  const value = dom.ttsKey ? dom.ttsKey.value.trim() : "";
+  return value && value !== derivedTtsKey(provider) ? value : null;
+}
+
+// Snapshot the fields into the outgoing provider's bucket before switching.
+function saveActiveTtsProfile(provider = state.activeTtsProvider) {
+  if (provider === undefined || provider === null) return;
+  const profiles = state.ttsProfiles || (state.ttsProfiles = {});
+  profiles[provider] = {
+    model: currentTtsModelField(),
+    voice: currentTtsVoiceField(),
+    urlOverride: ttsUrlOverrideFor(provider),
+    keyOverride: ttsKeyOverrideFor(provider),
+  };
+  persistTtsProfiles();
+}
+
+function rememberTtsModel(value) {
+  const provider = state.activeTtsProvider;
+  if (provider === undefined || provider === null) return;
+  const profiles = state.ttsProfiles || (state.ttsProfiles = {});
+  const profile = profiles[provider] || (profiles[provider] = {});
+  profile.model = String(value || "");
+  profile.voice = profile.voice || "";
+  profile.urlOverride = ttsUrlOverrideFor(provider);
+  profile.keyOverride = ttsKeyOverrideFor(provider);
+  persistTtsProfiles();
+}
+
+function rememberTtsVoice(value) {
+  const provider = state.activeTtsProvider;
+  if (provider === undefined || provider === null) return;
+  const profiles = state.ttsProfiles || (state.ttsProfiles = {});
+  const profile = profiles[provider] || (profiles[provider] = {});
+  profile.voice = String(value || "");
+  profile.model = profile.model || "";
+  persistTtsProfiles();
+}
+
+function rememberTtsEndpointFields() {
+  const provider = state.activeTtsProvider;
+  if (provider === undefined || provider === null) return;
+  const profiles = state.ttsProfiles || (state.ttsProfiles = {});
+  const profile = profiles[provider] || (profiles[provider] = {});
+  profile.urlOverride = ttsUrlOverrideFor(provider);
+  profile.keyOverride = ttsKeyOverrideFor(provider);
+  persistTtsProfiles();
+}
+
+// Load a provider's remembered model/voice and re-derive its URL/key. The
+// stored `penguin_tts_url`/`penguin_tts_key` keys hold only user overrides, so
+// the background worker can keep resolving derived endpoints by itself.
+function applyTtsProfile(provider) {
+  const profile = (state.ttsProfiles || {})[provider] || {};
+  const urlOverride = profile.urlOverride || "";
+  const keyOverride = profile.keyOverride || "";
+  if (dom.ttsModel) dom.ttsModel.value = profile.model || "";
+  if (dom.ttsUrl) dom.ttsUrl.value = urlOverride || derivedTtsUrl(provider) || "";
+  if (dom.ttsKey) dom.ttsKey.value = keyOverride || derivedTtsKey(provider) || "";
+  // The voice is restored once the new provider's voice list is fetched.
+  state.pendingTtsVoice = profile.voice || "";
+  saveTtsSetting(TTS_MODEL_KEY, dom.ttsModel ? dom.ttsModel.value : "");
+  saveTtsSetting(TTS_URL_KEY, urlOverride);
+  saveTtsSetting(TTS_KEY_KEY, keyOverride);
+  saveTtsSetting(TTS_VOICE_KEY, state.pendingTtsVoice);
+}
+
+// Keep non-overridden URL/key fields in sync with their live source (chat
+// connection changes, Local Server URL edits, cloud key changes).
+function syncDerivedTtsFields() {
+  const provider = state.activeTtsProvider;
+  const profile = (state.ttsProfiles || {})[provider] || {};
+  if (dom.ttsUrl) {
+    dom.ttsUrl.value = profile.urlOverride || derivedTtsUrl(provider) || "";
+  }
+  if (dom.ttsKey) {
+    dom.ttsKey.value = profile.keyOverride || derivedTtsKey(provider) || "";
+  }
+  saveTtsSetting(TTS_URL_KEY, profile.urlOverride || "");
+  saveTtsSetting(TTS_KEY_KEY, profile.keyOverride || "");
+}
+
+// First run after the update: seed the active provider's profile from the
+// existing single global settings so nothing is lost.
+async function loadTtsProfiles() {
+  state.ttsProfiles = await getTtsProfiles();
+  const active = dom.ttsProvider
+    ? dom.ttsProvider.value
+    : localStorage.getItem(TTS_PROVIDER_KEY) || "";
+  if (!state.ttsProfiles[active]) {
+    state.ttsProfiles[active] = {
+      model: localStorage.getItem(TTS_MODEL_KEY) || "",
+      voice: localStorage.getItem(TTS_VOICE_KEY) || "",
+      urlOverride: ttsUrlOverrideFor(active),
+      keyOverride: ttsKeyOverrideFor(active),
+    };
+    persistTtsProfiles();
+  }
+  state.activeTtsProvider = active;
+  return active;
+}
+
+// ---------- TTS fetch helpers ----------
+
+function populateTtsModelList(models) {
+  if (!dom.ttsModelList) return;
+  dom.ttsModelList.innerHTML = "";
+  for (const name of models) {
+    const option = document.createElement("option");
+    option.value = name;
+    dom.ttsModelList.appendChild(option);
+  }
+}
+
+// GET /v1/models. Only ids that look like speech models are kept, so a
+// server's chat/LLM model (e.g. koboldcpp's "inactive") is never suggested or
+// auto-selected as the TTS model.
+async function fetchTtsModels(baseUrl, headers) {
+  if (!baseUrl) return null;
+  try {
+    const response = await fetch(`${baseUrl}/v1/models`, { headers });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray(data.data)
+        ? data.data
+        : Array.isArray(data.models)
+          ? data.models
+          : [];
+    return list
+      .map((model) =>
+        typeof model === "string" ? model : model && (model.id || model.name)
+      )
+      .filter(Boolean)
+      .filter((id) => /tts|audio|speech|voice|kokoro/i.test(id));
+  } catch (error) {
+    return null;
+  }
+}
+
+// Fetches models + voices for the active provider. `pickModel` adopts the
+// first fetched model when this provider has none saved yet.
+async function refreshTtsAfterProviderChange(options = {}) {
+  const silent = options.silent !== false;
+  const pickModel = !!options.pickModel;
+  const providerAtStart = state.activeTtsProvider;
+  const endpoint = resolveTtsEndpoint();
+  if (!endpoint.ok) {
+    showTtsVoiceUnsupported(endpoint.reason);
+    refreshSpeakButtons();
+    refreshActiveTtsModel();
+    if (!silent) {
+      setStatus("Fetch failed");
+      appendSystemMessage(endpoint.reason);
+    }
+    return { ok: false, reason: endpoint.reason };
+  }
+
+  const [models, voices] = await Promise.all([
+    fetchTtsModels(endpoint.baseUrl, endpoint.headers),
+    fetchTtsVoices(endpoint.baseUrl, endpoint.headers),
+  ]);
+
+  // The user switched provider again while this fetch was in flight.
+  if (state.activeTtsProvider !== providerAtStart) {
+    return { ok: false, stale: true };
+  }
+
+  if (models) populateTtsModelList(models);
+
+  if (pickModel && models && models.length && !currentTtsModelField()) {
+    // `models` already contains only speech-looking ids; for strict providers
+    // still require a model the OpenAI voice table recognizes.
+    const candidate = endpoint.permissive
+      ? models[0]
+      : models.find((name) => knownTtsVoices(name));
+    if (candidate) {
+      if (dom.ttsModel) dom.ttsModel.value = candidate;
+      saveTtsSetting(TTS_MODEL_KEY, candidate);
+      rememberTtsModel(candidate);
+    }
+  }
+
+  const preferred = state.pendingTtsVoice || "";
+  state.pendingTtsVoice = "";
+  const model = effectiveTtsModel();
+  const known = knownTtsVoices(model);
+  if (voices && voices.length) populateTtsVoices(voices, preferred);
+  else if (known) populateTtsVoices(known, preferred);
+  else if (endpoint.permissive) showTtsVoiceManual();
+  else {
+    showTtsVoiceUnsupported(
+      `"${model}" is not recognized as a text-to-speech model.`
+    );
+  }
+
+  refreshSpeakButtons();
+  refreshActiveTtsModel();
+
+  if (!silent) {
+    if (!models && !voices) {
+      setStatus("Fetch failed");
+      appendSystemMessage(
+        `Failed to fetch TTS models/voices from ${endpoint.baseUrl}.`
+      );
+    } else {
+      const modelCount = models ? models.length : 0;
+      const voiceCount = voices ? voices.length : 0;
+      setStatus(`Found ${modelCount} model(s)`);
+      appendSystemMessage(
+        `Found ${modelCount} TTS model(s) and ${voiceCount} voice(s).`
+      );
+    }
+  }
+  return { ok: true, models, voices };
+}
+
+// Provider switch: remember the old provider, restore the new one, then
+// auto-fetch its model/voice lists.
+async function handleTtsProviderChange() {
+  const next = dom.ttsProvider ? dom.ttsProvider.value : "";
+  const previous = state.activeTtsProvider;
+  if (previous !== next) {
+    saveActiveTtsProfile(previous);
+    state.activeTtsProvider = next;
+    applyTtsProfile(next);
+  }
+  saveTtsSetting(TTS_PROVIDER_KEY, next);
+  if (dom.ttsRemoveProvider) {
+    dom.ttsRemoveProvider.hidden = !isCustomTtsProvider(next);
+  }
+  await refreshTtsAfterProviderChange({ pickModel: true, silent: true });
+}
+
+async function fetchTtsSettingsManually() {
+  if (!dom.ttsFetch) return;
+  const originalLabel = dom.ttsFetch.textContent;
+  dom.ttsFetch.disabled = true;
+  dom.ttsFetch.textContent = t("sound.fetching", "Fetching...");
+  setStatus("Fetching TTS models and voices...");
+  try {
+    await refreshTtsAfterProviderChange({ pickModel: true, silent: false });
+  } finally {
+    dom.ttsFetch.disabled = false;
+    dom.ttsFetch.textContent = originalLabel;
+  }
+}
+
+// Clears model/URL/voice for the current provider (the provider selection and
+// the API key are kept). Re-derives the URL from the provider and forgets this
+// provider's remembered model/voice/URL.
+async function resetTtsSettings() {
+  const provider = state.activeTtsProvider;
+  const keyOverride = ttsKeyOverrideFor(provider);
+  const profiles = state.ttsProfiles || (state.ttsProfiles = {});
+  profiles[provider] = {
+    model: "",
+    voice: "",
+    urlOverride: null,
+    keyOverride,
+  };
+  persistTtsProfiles();
+
+  if (dom.ttsModel) dom.ttsModel.value = "";
+  if (dom.ttsUrl) dom.ttsUrl.value = derivedTtsUrl(provider) || "";
+  if (dom.ttsVoice) {
+    dom.ttsVoice.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "";
+    dom.ttsVoice.appendChild(option);
+    dom.ttsVoice.value = "";
+    dom.ttsVoice.disabled = false;
+    dom.ttsVoice.title = "";
+  }
+  if (dom.ttsVoiceManual) {
+    dom.ttsVoiceManual.value = "";
+    dom.ttsVoiceManual.hidden = true;
+  }
+  if (dom.ttsModelList) dom.ttsModelList.innerHTML = "";
+  state.pendingTtsVoice = "";
+
+  saveTtsSetting(TTS_MODEL_KEY, "");
+  saveTtsSetting(TTS_URL_KEY, "");
+  saveTtsSetting(TTS_VOICE_KEY, "");
+
+  refreshSpeakButtons();
+  refreshActiveTtsModel();
+  appendSystemMessage("Text-to-speech settings reset (API key kept).");
+}
+
+// Runs once after the settings have loaded: apply the stored provider and
+// auto-fetch its models/voices.
+async function initializeTtsSettings() {
+  if (state.ttsInitialized) return;
+  state.ttsInitialized = true;
+  renderTtsProviderOptions();
+  state.activeTtsProvider = dom.ttsProvider ? dom.ttsProvider.value : "";
+  applyTtsProfile(state.activeTtsProvider);
+  await refreshTtsAfterProviderChange({ pickModel: true, silent: true });
+}
+
+// ---------- Active TTS model indicator ----------
+
+function refreshActiveTtsModel() {
+  if (!dom.ttsActiveModel) return;
+  const config = getTtsConfig();
+  const label = t("sound.activeModel", "Active TTS model");
+  if (!config.supported) {
+    dom.ttsActiveModel.textContent = `${label}: —`;
+    return;
+  }
+  const providerLabel = ttsProviderLabel(
+    dom.ttsProvider ? dom.ttsProvider.value : ""
+  );
+  dom.ttsActiveModel.textContent = `${label}: ${config.model}${
+    providerLabel ? ` · ${providerLabel}` : ""
+  }`;
+}
+
+// On-screen "now reading" indicator, shown while audio plays.
+let activeTtsLabel = null;
+function showTtsNowPlaying(model) {
+  hideTtsNowPlaying();
+  const text = String(model || "").trim();
+  if (!text) return;
+  const label = document.createElement("div");
+  label.className = "tts-now-playing";
+  label.textContent = `${t("msg.readingWith", "Reading with")} ${text}`;
+  document.body.appendChild(label);
+  activeTtsLabel = label;
+}
+
+function hideTtsNowPlaying() {
+  if (!activeTtsLabel) return;
+  activeTtsLabel.remove();
+  activeTtsLabel = null;
+}
+
+// Copy the Local Server tab URL into the TTS override field (the "Local
+// server" preset). Kept in sync while the preset is selected, unless the user
+// typed their own override.
+function syncLocalTtsUrl() {
+  if (!dom.ttsUrl || !dom.serverUrl) return;
+  const profile = (state.ttsProfiles || {})[state.activeTtsProvider] || {};
+  if (profile.urlOverride) return;
+  const url = dom.serverUrl.value.trim().replace(/\/+$/, "");
+  dom.ttsUrl.value = url;
+  saveTtsSetting(TTS_URL_KEY, "");
+  refreshActiveTtsModel();
+}
+
+function bindCustomTtsProviders() {
+  if (dom.ttsAddProvider && dom.ttsAddProviderForm) {
+    dom.ttsAddProvider.addEventListener("click", () => {
+      dom.ttsAddProviderForm.hidden = !dom.ttsAddProviderForm.hidden;
+      if (!dom.ttsAddProviderForm.hidden && dom.ttsAddProviderName) {
+        dom.ttsAddProviderName.focus();
+      }
+    });
+  }
+  const submitOnEnter = (element) => {
+    if (!element) return;
+    element.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      addCustomTtsProvider();
+    });
+  };
+  submitOnEnter(dom.ttsAddProviderName);
+  submitOnEnter(dom.ttsAddProviderUrl);
+  if (dom.ttsAddProviderConfirm) {
+    dom.ttsAddProviderConfirm.addEventListener("click", addCustomTtsProvider);
+  }
+  if (dom.ttsAddProviderCancel && dom.ttsAddProviderForm) {
+    dom.ttsAddProviderCancel.addEventListener("click", () => {
+      dom.ttsAddProviderForm.hidden = true;
+      if (dom.ttsAddProviderName) dom.ttsAddProviderName.value = "";
+      if (dom.ttsAddProviderUrl) dom.ttsAddProviderUrl.value = "";
+    });
+  }
+  if (dom.ttsRemoveProvider) {
+    dom.ttsRemoveProvider.addEventListener("click", removeCustomTtsProvider);
+  }
+}
+
+async function addCustomTtsProvider() {
+  const name = dom.ttsAddProviderName ? dom.ttsAddProviderName.value.trim() : "";
+  const url = dom.ttsAddProviderUrl
+    ? dom.ttsAddProviderUrl.value.trim().replace(/\/+$/, "")
+    : "";
+  if (!name || !url) {
+    appendSystemMessage("Enter both a provider name and a server URL.");
+    return;
+  }
+
+  const providers = await getCustomTtsProviders();
+  if (providers.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+    appendSystemMessage(`A TTS provider named "${name}" already exists.`);
+    return;
+  }
+
+  const id = `tts_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  providers.push({ id, name, url });
+  await saveCustomTtsProviders(providers);
+  state.customTtsProviders = providers;
+
+  if (dom.ttsAddProviderForm) dom.ttsAddProviderForm.hidden = true;
+  if (dom.ttsAddProviderName) dom.ttsAddProviderName.value = "";
+  if (dom.ttsAddProviderUrl) dom.ttsAddProviderUrl.value = "";
+
+  renderTtsProviderOptions(id);
+  saveTtsSetting(TTS_PROVIDER_KEY, id);
+  state.activeTtsProvider = id;
+  state.ttsProfiles[id] = {
+    model: "",
+    voice: "",
+    urlOverride: null,
+    keyOverride: null,
+  };
+  applyTtsProfile(id);
+  await refreshTtsAfterProviderChange({ pickModel: true, silent: true });
+}
+
+async function removeCustomTtsProvider() {
+  const provider = dom.ttsProvider ? dom.ttsProvider.value : "";
+  if (!isCustomTtsProvider(provider)) return;
+
+  const providers = await getCustomTtsProviders();
+  const removed = providers.find((item) => item.id === provider);
+  const remaining = providers.filter((item) => item.id !== provider);
+  await saveCustomTtsProviders(remaining);
+  state.customTtsProviders = remaining;
+
+  if (removed) {
+    appendSystemMessage(`Removed TTS provider "${removed.name}".`);
+  }
+  renderTtsProviderOptions("");
+  saveTtsSetting(TTS_PROVIDER_KEY, "");
+  state.activeTtsProvider = "";
+  applyTtsProfile("");
+  await refreshTtsAfterProviderChange({ pickModel: true, silent: true });
 }
 
 function isBuiltInCloudProvider(provider) {
@@ -3292,7 +3960,11 @@ function ttsModelValue() {
 }
 
 function ttsVoiceValue() {
-  const voice = dom.ttsVoice ? dom.ttsVoice.value.trim() : "";
+  const manual =
+    dom.ttsVoiceManual && !dom.ttsVoiceManual.hidden
+      ? dom.ttsVoiceManual.value.trim()
+      : "";
+  const voice = manual || (dom.ttsVoice ? dom.ttsVoice.value.trim() : "");
   return voice || DEFAULT_TTS_VOICE;
 }
 
@@ -3300,107 +3972,153 @@ function defaultTtsModel(provider) {
   return provider === "openai" ? "gpt-4o-mini-tts" : "tts-1";
 }
 
-// Decide whether the currently selected provider/model can speak. Only
-// OpenAI-compatible endpoints expose the /v1/audio/speech route.
-function getTtsConfig() {
+// Resolve the endpoint (base URL + headers) for the current TTS selection
+// without judging the model, so the model/voice list can be fetched even
+// before a model is chosen.
+//
+// Resolution order (highest first): the dedicated TTS URL override, the "Local
+// server" preset (reuses the Local Server tab URL), a custom TTS endpoint, a
+// built-in cloud provider, then the chat connection. `permissive` marks local
+// and custom endpoints that accept any model/voice name.
+function resolveTtsEndpoint() {
   let baseUrl = "";
   let headers = { "Content-Type": "application/json" };
+  let permissive = false;
+  let reason = "";
 
   // A dedicated TTS endpoint/provider is independent of the chat model, so a
   // user can chat with DeepSeek and speak with OpenAI at the same time.
-  const dedicatedUrl = dom.ttsUrl ? dom.ttsUrl.value.trim() : "";
-  const dedicatedKey = dom.ttsKey ? dom.ttsKey.value.trim() : "";
   const ttsProvider = dom.ttsProvider ? dom.ttsProvider.value : "";
+  const urlField = dom.ttsUrl ? dom.ttsUrl.value.trim() : "";
+  // An auto-filled derived URL must not shadow the provider's own rules (e.g.
+  // reject non-OpenAI built-ins); a real user override still wins.
+  const dedicatedUrl =
+    urlField && urlField !== derivedTtsUrl(ttsProvider) ? urlField : "";
+  const dedicatedKey = dom.ttsKey ? dom.ttsKey.value.trim() : "";
 
   if (dedicatedUrl) {
     baseUrl = dedicatedUrl.replace(/\/+$/, "");
     if (dedicatedKey) {
       headers.Authorization = `Bearer ${dedicatedKey}`;
     }
+    permissive = true;
+  } else if (ttsProvider === TTS_LOCAL_PROVIDER) {
+    // Reuse the URL configured in the Local Server tab.
+    const type = dom.serverType.value;
+    if (type === "ollama") {
+      reason = "Ollama does not expose a text-to-speech endpoint.";
+    } else {
+      baseUrl = dom.serverUrl.value.trim().replace(/\/+$/, "");
+      if (!baseUrl) {
+        reason = "Set the local server URL to use text-to-speech.";
+      } else {
+        if (dedicatedKey) headers.Authorization = `Bearer ${dedicatedKey}`;
+        permissive = true;
+      }
+    }
+  } else if (ttsProvider && isCustomTtsProvider(ttsProvider)) {
+    const custom = (state.customTtsProviders || []).find(
+      (item) => item.id === ttsProvider
+    );
+    baseUrl = String((custom && custom.url) || "").replace(/\/+$/, "");
+    if (!baseUrl) {
+      reason = "Set the URL for this TTS provider.";
+    } else {
+      if (dedicatedKey) headers.Authorization = `Bearer ${dedicatedKey}`;
+      permissive = true;
+    }
   } else if (ttsProvider) {
     // Reuse the stored cloud credentials of the chosen TTS provider.
     const kind = cloudProviderKind(ttsProvider);
     if (kind !== "openai") {
-      return {
-        supported: false,
-        reason: `${cloudProviderLabel(
+      reason = `${cloudProviderLabel(
+        ttsProvider
+      )} does not expose an OpenAI-compatible speech endpoint.`;
+    } else {
+      const endpoint = cloudProviderDefaults(ttsProvider);
+      const store = state.cloudStore || {};
+      baseUrl = String(
+        store[`cloud_api_url_${ttsProvider}`] || endpoint.url || ""
+      ).replace(/\/+$/, "");
+      const apiKey =
+        dedicatedKey ||
+        String(store[`cloud_api_key_${ttsProvider}`] || "").trim();
+      if (!baseUrl) {
+        reason = `Set the API URL for ${cloudProviderLabel(ttsProvider)}.`;
+      } else if (!apiKey) {
+        reason = `Add an API key for ${cloudProviderLabel(
           ttsProvider
-        )} does not expose an OpenAI-compatible speech endpoint.`,
-      };
+        )} in the Cloud Server tab, or paste it in the TTS API key field.`;
+      } else {
+        headers = {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        };
+      }
     }
-    const endpoint = cloudProviderDefaults(ttsProvider);
-    const store = state.cloudStore || {};
-    baseUrl = String(
-      store[`cloud_api_url_${ttsProvider}`] || endpoint.url || ""
-    ).replace(/\/+$/, "");
-    const apiKey =
-      dedicatedKey || String(store[`cloud_api_key_${ttsProvider}`] || "").trim();
-    if (!baseUrl) {
-      return {
-        supported: false,
-        reason: `Set the API URL for ${cloudProviderLabel(ttsProvider)}.`,
-      };
-    }
-    if (!apiKey) {
-      return {
-        supported: false,
-        reason: `Add an API key for ${cloudProviderLabel(
-          ttsProvider
-        )} in the Cloud Server tab, or paste it in the TTS API key field.`,
-      };
-    }
-    headers = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    };
   } else if (state.mode === "cloud") {
     const provider = dom.cloudProvider.value;
     const kind = cloudProviderKind(provider);
     if (kind !== "openai") {
-      return {
-        supported: false,
-        reason: `${cloudProviderLabel(
-          provider
-        )} does not expose an OpenAI-compatible speech endpoint. Pick a TTS provider above or switch to an OpenAI-compatible chat provider.`,
-      };
+      reason = `${cloudProviderLabel(
+        provider
+      )} does not expose an OpenAI-compatible speech endpoint. Pick a TTS provider above or switch to an OpenAI-compatible chat provider.`;
+    } else {
+      const endpoint = cloudProviderDefaults(provider);
+      baseUrl = (dom.cloudApiUrl.value.trim() || endpoint.url || "").replace(
+        /\/+$/,
+        ""
+      );
+      const apiKey = dedicatedKey || dom.cloudApiKey.value.trim();
+      if (!baseUrl || !apiKey) {
+        reason = "Set the cloud API URL and API key to use text-to-speech.";
+      } else {
+        headers = {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        };
+      }
     }
-
-    const endpoint = cloudProviderDefaults(provider);
-    baseUrl = (dom.cloudApiUrl.value.trim() || endpoint.url || "").replace(
-      /\/+$/,
-      ""
-    );
-    const apiKey = dedicatedKey || dom.cloudApiKey.value.trim();
-    if (!baseUrl || !apiKey) {
-      return {
-        supported: false,
-        reason: "Set the cloud API URL and API key to use text-to-speech.",
-      };
-    }
-    headers = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    };
   } else {
     const type = dom.serverType.value;
     if (type === "ollama") {
-      return {
-        supported: false,
-        reason: "Ollama does not expose a text-to-speech endpoint.",
-      };
-    }
-    baseUrl = dom.serverUrl.value.trim().replace(/\/+$/, "");
-    if (!baseUrl) {
-      return {
-        supported: false,
-        reason: "Set the local server URL to use text-to-speech.",
-      };
+      reason = "Ollama does not expose a text-to-speech endpoint.";
+    } else {
+      baseUrl = dom.serverUrl.value.trim().replace(/\/+$/, "");
+      if (!baseUrl) {
+        reason = "Set the local server URL to use text-to-speech.";
+      } else {
+        if (dedicatedKey) headers.Authorization = `Bearer ${dedicatedKey}`;
+        permissive = true;
+      }
     }
   }
 
-  // Only recognized TTS models can speak through /v1/audio/speech.
+  if (!baseUrl) {
+    return {
+      ok: false,
+      baseUrl: "",
+      headers,
+      permissive: false,
+      reason: reason || "Text-to-speech is not available.",
+    };
+  }
+
+  return { ok: true, baseUrl, headers, permissive, reason: "" };
+}
+
+// Decide whether the currently selected provider/model can speak. Only
+// OpenAI-compatible endpoints expose the /v1/audio/speech route.
+function getTtsConfig() {
+  const endpoint = resolveTtsEndpoint();
+  if (!endpoint.ok) {
+    return { supported: false, reason: endpoint.reason };
+  }
+
+  // Local/custom endpoints accept any model name; only the built-in OpenAI
+  // providers are restricted to the known text-to-speech models.
   const model = effectiveTtsModel();
-  if (!knownTtsVoices(model)) {
+  if (!endpoint.permissive && !knownTtsVoices(model)) {
     return {
       supported: false,
       reason: `"${model}" is not recognized as a text-to-speech model.`,
@@ -3409,14 +4127,17 @@ function getTtsConfig() {
 
   return {
     supported: true,
-    url: `${baseUrl}/v1/audio/speech`,
-    headers,
+    url: `${endpoint.baseUrl}/v1/audio/speech`,
+    baseUrl: endpoint.baseUrl,
+    permissive: endpoint.permissive,
+    headers: endpoint.headers,
     model,
     voice: ttsVoiceValue(),
   };
 }
 
 function stopActiveSpeech() {
+  hideTtsNowPlaying();
   if (!activeSpeech) return;
   const { controller, audio, url, restore } = activeSpeech;
   activeSpeech = null;
@@ -3449,7 +4170,7 @@ function updateSpeakButtonVisibility(button) {
   const config = getTtsConfig();
   button.hidden = !config.supported;
   button.title = config.supported
-    ? t("msg.readAloud", "Read aloud")
+    ? `${t("msg.readAloud", "Read aloud")} · ${config.model}`
     : config.reason || "Text-to-speech is not available.";
   if (!config.supported) button.disabled = true;
   else button.disabled = false;
@@ -3564,6 +4285,8 @@ async function startSpeech(text, button, ui) {
     activeSpeech.audio = audio;
     activeSpeech.url = url;
     ui.speaking();
+    // Shows which TTS model is reading, while it reads.
+    showTtsNowPlaying(config.model);
 
     audio.addEventListener("ended", () => {
       if (activeSpeech && activeSpeech.audio === audio) stopActiveSpeech();
@@ -3579,6 +4302,7 @@ async function startSpeech(text, button, ui) {
   } catch (error) {
     if (error && error.name === "AbortError") return;
 
+    hideTtsNowPlaying();
     const wasActive = activeSpeech && activeSpeech.button === button;
     if (wasActive) activeSpeech = null;
 
@@ -3606,7 +4330,11 @@ function testTtsVoice() {
     appendSystemMessage(config.reason || "Text-to-speech is not available.");
     return;
   }
-  if (!dom.ttsVoice || !dom.ttsVoice.value) {
+  const manual =
+    dom.ttsVoiceManual && !dom.ttsVoiceManual.hidden
+      ? dom.ttsVoiceManual.value.trim()
+      : "";
+  if (!manual && (!dom.ttsVoice || !dom.ttsVoice.value)) {
     appendSystemMessage("Load a TTS model and pick a voice first.");
     return;
   }
@@ -4880,8 +5608,14 @@ async function collectModelOptions() {
 
 async function refreshUnifiedModelSelect() {
   const options = await collectModelOptions();
+  state.customTtsProviders = await getCustomTtsProviders();
   renderTtsProviderOptions();
-  applyTtsModel({ persist: false });
+  if (state.ttsInitialized) {
+    // The connection changed: refresh derived URL/key (the "same as chat"
+    // provider and built-in cloud creds) but keep the selected TTS provider.
+    syncDerivedTtsFields();
+    refreshActiveTtsModel();
+  }
   state.modelOptions = options;
 
   const current = currentQuickModelId();

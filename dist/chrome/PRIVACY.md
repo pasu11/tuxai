@@ -57,7 +57,7 @@ Only user-triggered requests:
 
 1. **Model list fetch** — when you click a Fetch button, TuxAI asks your configured server for its model list.
 2. **AI chat/action request** — when you send a message or run a tool, TuxAI sends your message/selected text, any attachments, and the tool instruction to the configured AI server.
-3. **Text-to-speech request** — when you click a speaker button (or **Test** in the Sound settings), TuxAI sends the text to be spoken to the configured TTS endpoint.
+3. **Text-to-speech request** — when you click a speaker button (or **Test** in the Sound settings), TuxAI sends the text to be spoken to the configured TTS endpoint. This can be a cloud provider, a local server from the Local Server tab, or a custom OpenAI-compatible endpoint you added. Selecting a TTS provider, or clicking **Fetch**, also asks that same endpoint for its model and voice lists (`/v1/models`, `/v1/audio/voices`).
 4. **Web search** — only when you turn it on with the globe button next to the model picker (it is off by default) and the model decides it needs the web, TuxAI sends the search query to DuckDuckGo, or to Bing when DuckDuckGo answers with a bot challenge, and (unless disabled) fetches the top result pages directly from your browser to build the context for that answer. This goes to those search engines/websites, never to a TuxAI server.
 
 File and image attachments are read in the browser and included only in the request to the configured AI provider. They are not uploaded to any TuxAI server.

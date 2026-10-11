@@ -264,13 +264,15 @@ Open:
 Settings → Sound
 ```
 
-- Choose a **TTS provider**. It is independent of the chat provider, so you can chat with one provider and speak with another. Leave it as **Same as chat provider** to reuse the chat connection, or pick a cloud provider (for example OpenAI) to reuse that provider's stored key.
-- Enter a **TTS model** and click **Use** to load its voices. If the model does not support text-to-speech, the Voice field shows **TTS not supported**.
-- The **TTS API URL** and **TTS API key** fields are optional overrides.
-- Pick a **Voice** and click **Test** to preview it.
-- Click the speaker icon under an assistant message, or the speaker button in the quick popup, to read the text aloud. Click it again to stop.
+- Choose a **TTS provider**. It is independent of the chat provider, so you can chat with one provider and speak with another. Leave it as **Same as chat provider** to reuse the chat connection, pick a cloud provider (for example OpenAI) to reuse that provider's stored key, choose **Local server** to reuse the Local Server tab URL, or add your own OpenAI-compatible endpoint with the **+** button.
+- Switching provider restores that provider's remembered model/voice, re-fills its URL/key, and automatically fetches its **model** and **voice** lists. **Fetch** does the same on demand; **Use** applies the typed model. If a provider has no remembered model yet, the first fetched TTS model is selected automatically.
+- Local and custom endpoints accept any model name (for example `kokoro`); their voices are fetched from `/v1/audio/voices` when the server provides it, otherwise you can type a voice. For OpenAI, a model that does not support text-to-speech shows **TTS not supported**.
+- The **TTS API URL** and **TTS API key** fields show the effective endpoint for the current provider (local server URL, custom endpoint URL, or the cloud key). Edit them to override; per-provider edits are remembered, and derived values are refreshed every time you switch.
+- The line below the voice picker shows the **active TTS model**. Pick a **Voice** and click **Test** to preview it.
+- **Reset** clears the model, URL and voice for the current provider (the provider and the API key are kept).
+- Click the speaker icon under an assistant message, or the speaker button in the quick popup, to read the text aloud. While it reads, the sidebar and the page popup show which model is speaking; click again to stop.
 
-For example, chat with DeepSeek while speaking with OpenAI: set the TTS provider to **OpenAI**, the TTS model to `gpt-4o-mini-tts`, and choose a voice.
+For example, chat with DeepSeek while speaking with OpenAI: set the TTS provider to **OpenAI**, the TTS model to `gpt-4o-mini-tts`, and choose a voice. To speak through a local OpenAI-compatible server such as [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) on `http://localhost:5001`, choose **Local server**, click **Fetch**, and pick one of the fetched voices.
 
 ### 8. UI settings
 

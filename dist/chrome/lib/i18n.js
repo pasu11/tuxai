@@ -73,8 +73,17 @@
       "sound.title": "Text to speech",
       "sound.provider": "TTS provider",
       "sound.sameAsChat": "Same as chat provider",
+      "sound.localServer": "Local server",
+      "sound.addProvider": "Add TTS provider",
+      "sound.removeProvider": "Remove",
+      "sound.providerNamePlaceholder": "Provider name, e.g. Kokoro",
+      "sound.addProviderConfirm": "Add",
       "sound.model": "TTS model",
       "sound.use": "Use",
+      "sound.fetch": "Fetch",
+      "sound.fetching": "Fetching...",
+      "sound.activeModel": "Active TTS model",
+      "sound.reset": "Reset",
       "sound.apiUrl": "TTS API URL",
       "sound.apiKey": "TTS API key",
       "sound.optionalOverride": "(optional override)",
@@ -82,7 +91,7 @@
       "sound.test": "Test",
       "sound.notSupported": "TTS not supported",
       "sound.hint":
-        "The TTS provider/model is independent of the chat model, so you can chat with DeepSeek and speak with OpenAI at the same time: pick OpenAI as the TTS provider (it reuses the OpenAI key stored in the Cloud Server tab), then set the TTS model to gpt-4o-mini-tts. Leave the provider as “Same as chat provider” to reuse the chat connection. The URL/key fields are optional overrides. Enter a TTS model and click Use to load its voices; if the model has no text-to-speech support, the Voice field shows “TTS not supported”. Use Test to preview the selected voice.",
+        "The TTS provider/model is independent of the chat model, so you can chat with DeepSeek and speak with OpenAI at the same time: pick OpenAI as the TTS provider (it reuses the OpenAI key stored in the Cloud Server tab), then set the TTS model to gpt-4o-mini-tts. Leave the provider as “Same as chat provider” to reuse the chat connection. For a local or self-hosted OpenAI-compatible speech server (for example Kokoro-FastAPI on http://localhost:5001), choose Local server to reuse the Local Server tab URL, or add a custom provider with the + button. Switching a provider restores that provider's saved model/voice, re-fills its URL/key, and fetches its model and voice lists; Fetch does the same on demand, and Use applies the typed model. Local/custom endpoints accept any model name. The active model is shown below the voice picker, and while reading the sidebar and page popup show which model is speaking.",
 
       "tools.title": "Manage Tools",
       "tools.new": "New tool",
@@ -106,21 +115,15 @@
       "search.title": "Web search",
       "search.on": "Web search on",
       "search.off": "Web search off",
-      "search.toggleHint":
-        "Use the globe button next to the model picker above the chat to allow or disallow web search. It is red when off and blue when on, and off by default; when it is on, the model decides on its own when it needs to search.",
+      "search.toggleTip":
+        "Turn web search on/off with the globe button above the chat. The model decides when to search.",
       "search.fetchPages": "Also read the top result pages for better answers",
+      "search.fetchPagesTip":
+        "Fetch the top result pages and add them as context for the answer.",
       "search.nativeOpenai":
         "Use OpenAI's built-in web search when available (OpenAI only)",
-      "search.hint":
-        "Queries go to DuckDuckGo, with Bing as a fallback when DuckDuckGo blocks the request; only OpenAI's native search uses your API key.",
-      "search.testTitle": "Test search",
-      "search.testQuery": "Query",
-      "search.testPlaceholder": "Latest news about...",
-      "search.test": "Test search",
-      "search.testing": "Searching...",
-      "search.engine": "Engine",
-      "search.results": "results",
-      "search.testFailed": "Search failed",
+      "search.nativeOpenaiTip":
+        "OpenAI only. Uses your API key; otherwise queries go to DuckDuckGo (Bing fallback).",
       "search.sources": "Sources",
       "search.searching": "Searching the web",
 
@@ -166,6 +169,7 @@
       "msg.copied": "Copied!",
       "msg.copyFailed": "Copy failed",
       "msg.readAloud": "Read aloud",
+      "msg.readingWith": "Reading with",
       "msg.stopReading": "Stop reading",
       "msg.ttsFailed": "Text-to-speech failed",
       "msg.audioFailed": "Audio playback failed",
@@ -268,8 +272,17 @@
       "sound.title": "语音朗读",
       "sound.provider": "TTS 服务商",
       "sound.sameAsChat": "与聊天服务商相同",
+      "sound.localServer": "本地服务器",
+      "sound.addProvider": "添加 TTS 服务商",
+      "sound.removeProvider": "移除",
+      "sound.providerNamePlaceholder": "服务商名称，例如 Kokoro",
+      "sound.addProviderConfirm": "添加",
       "sound.model": "TTS 模型",
       "sound.use": "使用",
+      "sound.fetch": "抓取",
+      "sound.fetching": "抓取中...",
+      "sound.activeModel": "当前 TTS 模型",
+      "sound.reset": "重置",
       "sound.apiUrl": "TTS API 地址",
       "sound.apiKey": "TTS API 密钥",
       "sound.optionalOverride": "（可选覆盖）",
@@ -277,7 +290,7 @@
       "sound.test": "测试",
       "sound.notSupported": "不支持 TTS",
       "sound.hint":
-        "TTS 的服务商/模型与聊天模型相互独立，所以可以一边用 DeepSeek 聊天、一边用 OpenAI 朗读：把 TTS 服务商选为 OpenAI（复用它存在云端服务里的密钥），再把 TTS 模型设为 gpt-4o-mini-tts。服务商保持“与聊天服务商相同”则沿用聊天连接。URL/密钥是可选的覆盖项。输入 TTS 模型后点“使用”加载音色；若模型不支持语音，音色处会显示“不支持 TTS”。点“测试”可试听选中的音色。",
+        "TTS 的服务商/模型与聊天模型相互独立，所以可以一边用 DeepSeek 聊天、一边用 OpenAI 朗读：把 TTS 服务商选为 OpenAI（复用它存在云端服务里的密钥），再把 TTS 模型设为 gpt-4o-mini-tts。服务商保持“与聊天服务商相同”则沿用聊天连接。若使用本地或自建的 OpenAI 兼容语音服务（例如运行在 http://localhost:5001 的 Kokoro-FastAPI），可选“本地服务器”复用本地服务器标签页的地址，或点 + 添加自定义服务商。切换服务商会恢复该服务商上次的模型/音色、重新填充 URL/密钥，并自动抓取模型与音色列表；“抓取”按钮可随时手动抓取，“使用”则应用输入的模型；本地/自定义服务商接受任意模型名。当前使用的模型显示在音色选择下方，朗读时侧边栏与页面弹窗都会显示正在使用的模型。",
 
       "tools.title": "管理工具",
       "tools.new": "新建工具",
@@ -301,20 +314,13 @@
       "search.title": "网页搜索",
       "search.on": "网页搜索已开启",
       "search.off": "网页搜索已关闭",
-      "search.toggleHint":
-        "使用聊天框上方模型选择器旁边的地球按钮开启或关闭网页搜索。关闭时显示红色，开启时显示蓝色，默认关闭；开启后由模型自行决定何时搜索。",
+      "search.toggleTip":
+        "用聊天框上方的地球按钮开启或关闭网页搜索，由模型自行决定何时搜索。",
       "search.fetchPages": "同时读取前几个结果页面，以获得更好的回答",
+      "search.fetchPagesTip": "抓取前几个结果页面的内容，作为回答的补充上下文。",
       "search.nativeOpenai": "可用时使用 OpenAI 内置网页搜索（仅 OpenAI）",
-      "search.hint":
-        "查询会发送到 DuckDuckGo；当 DuckDuckGo 拒绝请求时自动改用 Bing。只有 OpenAI 内置搜索会使用你的 API key。",
-      "search.testTitle": "测试搜索",
-      "search.testQuery": "查询",
-      "search.testPlaceholder": "例如：最新新闻……",
-      "search.test": "测试搜索",
-      "search.testing": "搜索中……",
-      "search.engine": "引擎",
-      "search.results": "条结果",
-      "search.testFailed": "搜索失败",
+      "search.nativeOpenaiTip":
+        "仅 OpenAI。会使用你的 API key；否则查询会发送到 DuckDuckGo（失败时改用 Bing）。",
       "search.sources": "来源",
       "search.searching": "正在搜索网页",
 
@@ -360,6 +366,7 @@
       "msg.copied": "已复制！",
       "msg.copyFailed": "复制失败",
       "msg.readAloud": "朗读",
+      "msg.readingWith": "正在使用",
       "msg.stopReading": "停止朗读",
       "msg.ttsFailed": "语音朗读失败",
       "msg.audioFailed": "音频播放失败",
@@ -443,6 +450,10 @@
     doc.querySelectorAll("[data-i18n-aria-label]").forEach((el) => {
       const key = el.getAttribute("data-i18n-aria-label");
       if (key) el.setAttribute("aria-label", translate(lang, key));
+    });
+    doc.querySelectorAll("[data-i18n-tooltip]").forEach((el) => {
+      const key = el.getAttribute("data-i18n-tooltip");
+      if (key) el.setAttribute("data-tooltip", translate(lang, key));
     });
   }
 

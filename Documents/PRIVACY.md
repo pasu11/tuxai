@@ -56,7 +56,7 @@ Only user-triggered requests:
 
 1. **Model list fetch** — when you click a Fetch button, TuxAI asks your configured server for its model list.
 2. **AI chat/action request** — when you send a message or run a tool, TuxAI sends your message/selected text, any attachments, and the tool instruction to the configured AI server.
-3. **Text-to-speech request** — when you click a speaker button (or **Test** in the Sound settings), TuxAI sends the text to be spoken to the configured TTS endpoint.
+3. **Text-to-speech request** — when you click a speaker button (or **Test** in the Sound settings), TuxAI sends the text to be spoken to the configured TTS endpoint. This can be a cloud provider, a local server from the Local Server tab, or a custom OpenAI-compatible endpoint you added. Selecting a TTS provider, or clicking **Fetch**, also asks that same endpoint for its model and voice lists (`/v1/models`, `/v1/audio/voices`).
 
 File and image attachments are read in the browser and included only in the request to the configured AI provider. They are not uploaded to any TuxAI server.
 
