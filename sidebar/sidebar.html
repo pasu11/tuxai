@@ -256,6 +256,18 @@
             <input id="web-search-native" type="checkbox" />
             <span data-i18n="search.nativeOpenai">Use OpenAI's built-in web search when available (OpenAI only)</span>
           </label>
+          <label class="search-check" data-i18n-tooltip="search.deepseekTip">
+            <input id="web-search-deepseek" type="checkbox" />
+            <span data-i18n="search.deepseek">Use DeepSeek's own Search API when available (DeepSeek only)</span>
+          </label>
+          <label class="search-check" data-i18n-tooltip="search.tabFallbackTip">
+            <input id="web-search-tab-fallback" type="checkbox" />
+            <span data-i18n="search.tabFallback">Retry in a background tab if the extension's search request is blocked</span>
+          </label>
+          <div class="tool-actions">
+            <button id="web-search-test" type="button" class="button button-secondary" data-i18n="search.test">Test search</button>
+          </div>
+          <p id="web-search-test-status" class="hint" role="status"></p>
         </div>
       </div>
 

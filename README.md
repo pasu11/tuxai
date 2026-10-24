@@ -272,10 +272,11 @@ Open:
 Settings → Built-in
 ```
 
-- **Also read the top result pages...** — when enabled, the top three results are fetched and summarized into the context for a better answer (default on).
+- **Also read the top result pages...** — when enabled, page content is included in the context for a better answer (default on). With DeepSeek's own search this is returned by the search API in the same request; with the keyless engines the top three result pages are fetched.
 - **Use OpenAI's built-in web search...** — for the OpenAI provider only, TuxAI first uses OpenAI's server-side web search (Responses API); if the model or account does not support it, it automatically falls back to the local tool loop.
+- **Use DeepSeek's own Search API...** — for the DeepSeek provider only (on by default), TuxAI calls `POST https://api.deepseek.com/v1/tools/search` with your existing DeepSeek API key. The search runs on DeepSeek's in-house engine and returns titles, URLs, snippets and page summaries/content, so the extension does not fetch search pages from the browser. DeepSeek bills this per successful request (US$0.75 per 1,000 searches as of October 2026; failed and empty searches are not billed); turn the option off to use the keyless engines instead.
 
-Search calls the DuckDuckGo HTML endpoint; when DuckDuckGo answers with a bot challenge (which happens on some networks), TuxAI retries automatically with Bing. Results used in an answer are listed as clickable **Sources** under the reply and are kept with the chat history.
+Search calls the DuckDuckGo HTML endpoint; when DuckDuckGo answers with a bot challenge or is unreachable (which happens on some networks), TuxAI retries automatically with Bing. Bing is queried through both `www.bing.com` and `cn.bing.com` (the Chinese host keeps working where the main one is blocked), using its RSS output first and the HTML page second. If a browser or blocker rejects the extension's own request (Vivaldi's tracker blocker does this for `bing.com`), TuxAI retries once in a temporary background tab and closes that tab as soon as the results are read; **Retry in a background tab…** in the same settings card turns this off. **Test search** in the same card runs a sample query and reports which engine answered, or the exact reason each engine failed. Results used in an answer are listed as clickable **Sources** under the reply and are kept with the chat history.
 
 Web search works with OpenAI, DeepSeek, Mistral, custom OpenAI-compatible endpoints, and local OpenAI-compatible servers. Anthropic, Gemini, and Cohere keep their normal behavior. DeepSeek's `deepseek-reasoner` cannot call tools, so it is skipped automatically.
 
@@ -356,7 +357,7 @@ See the full [PRIVACY.md](PRIVACY.md) for details.
 
 - Local-server requests go directly to the LLM server you configure.
 - Cloud requests go directly from your browser to the cloud provider you select.
-- Web search is off by default. When you turn it on, it sends the query to DuckDuckGo, or Bing if DuckDuckGo blocks it, and fetches the top result pages directly from your browser. No TuxAI server is involved.
+- Web search is off by default. When you turn it on, it sends the query to DuckDuckGo, or Bing if DuckDuckGo blocks it, and fetches the top result pages directly from your browser. If the browser blocks the extension's own request, the query is retried in a temporary background tab that closes as soon as its results are read. No TuxAI server is involved.
 - API keys are stored only in the extension's local browser storage.
 - Chat sessions, settings, and attachments are stored in the extension's local browser storage, not in the cloud.
 
