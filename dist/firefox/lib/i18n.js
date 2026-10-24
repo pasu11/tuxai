@@ -124,8 +124,22 @@
         "Use OpenAI's built-in web search when available (OpenAI only)",
       "search.nativeOpenaiTip":
         "OpenAI only. Uses your API key; otherwise queries go to DuckDuckGo (Bing fallback).",
+      "search.deepseek":
+        "Use DeepSeek's own Search API when available (DeepSeek only)",
+      "search.deepseekTip":
+        "DeepSeek only. Uses your DeepSeek API key and DeepSeek's in-house search engine. DeepSeek bills it per successful search (failed and empty searches are not billed); otherwise queries go to DuckDuckGo/Bing.",
+      "search.searchingDeepseek": "Searching with DeepSeek",
+      "search.tabFallback":
+        "Retry in a background tab if the extension's search request is blocked",
+      "search.tabFallbackTip":
+        "Some browsers and blockers reject requests made from an extension page but allow the same search in a normal tab. The temporary tab is closed as soon as its results are read.",
+      "search.searchingTab": "Searching in a background tab",
       "search.sources": "Sources",
       "search.searching": "Searching the web",
+      "search.test": "Test search",
+      "search.testRunning": "Testing search...",
+      "search.testOk": "Search works",
+      "search.testFailed": "Search failed",
 
       "misc.title": "Backup/Restore settings",
       "misc.export": "Export settings backup",
@@ -321,8 +335,20 @@
       "search.nativeOpenai": "可用时使用 OpenAI 内置网页搜索（仅 OpenAI）",
       "search.nativeOpenaiTip":
         "仅 OpenAI。会使用你的 API key；否则查询会发送到 DuckDuckGo（失败时改用 Bing）。",
+      "search.deepseek": "可用时使用 DeepSeek 自己的搜索 API（仅 DeepSeek）",
+      "search.deepseekTip":
+        "仅 DeepSeek。使用你的 DeepSeek API key 和 DeepSeek 自家搜索引擎；DeepSeek 按成功搜索次数计费（失败和空结果不计费），否则查询会走 DuckDuckGo/Bing。",
+      "search.searchingDeepseek": "正在使用 DeepSeek 搜索",
+      "search.tabFallback": "如果扩展的搜索请求被拦截，则在后台标签页重试",
+      "search.tabFallbackTip":
+        "有些浏览器或拦截插件会拒绝从扩展页面发出的请求，却允许在普通标签页中打开同一个搜索。读完结果后会立即关闭这个临时标签页。",
+      "search.searchingTab": "正在后台标签页中搜索",
       "search.sources": "来源",
       "search.searching": "正在搜索网页",
+      "search.test": "测试搜索",
+      "search.testRunning": "正在测试搜索……",
+      "search.testOk": "搜索可用",
+      "search.testFailed": "搜索失败",
 
       "misc.title": "备份 / 恢复设置",
       "misc.export": "导出设置备份",

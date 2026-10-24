@@ -9,7 +9,17 @@ import {
   moveToolId,
 } from "../lib/tools.js";
 import { renderMarkdown } from "../lib/markdown.js";
-import { searchForTool } from "../lib/websearch.js";
+import {
+  DEFAULT_PAGE_CHARS,
+  DEFAULT_PAGE_LIMIT,
+  DEFAULT_RESULT_LIMIT,
+  buildToolResultBlock,
+  decodeBingRedirect,
+  deepseekSearch,
+  fetchPageText,
+  searchForTool,
+  searchWebDetailed,
+} from "../lib/websearch.js";
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 
@@ -173,6 +183,8 @@ const RESTORED_MODEL_KEY = "penguin_restored_model";
 const WEB_SEARCH_ENABLED_KEY = "penguin_web_search_enabled";
 const WEB_SEARCH_FETCH_PAGES_KEY = "penguin_web_search_fetch_pages";
 const WEB_SEARCH_NATIVE_OPENAI_KEY = "penguin_web_search_native_openai";
+const WEB_SEARCH_DEEPSEEK_KEY = "penguin_web_search_deepseek";
+const WEB_SEARCH_TAB_FALLBACK_KEY = "penguin_web_search_tab_fallback";
 const MAX_SEARCH_ROUNDS = 3;
 
 // Function tool handed to OpenAI-compatible providers. The model decides when
@@ -348,6 +360,10 @@ const dom = {
   webSearchBtn: document.getElementById("web-search-btn"),
   webSearchFetchPages: document.getElementById("web-search-fetch-pages"),
   webSearchNativeOpenai: document.getElementById("web-search-native"),
+  webSearchDeepseek: document.getElementById("web-search-deepseek"),
+  webSearchTabFallback: document.getElementById("web-search-tab-fallback"),
+  webSearchTest: document.getElementById("web-search-test"),
+  webSearchTestStatus: document.getElementById("web-search-test-status"),
 };
 
 const state = {
@@ -380,6 +396,14 @@ const state = {
     enabled: localStorage.getItem(WEB_SEARCH_ENABLED_KEY) === "true",
     fetchPages: localStorage.getItem(WEB_SEARCH_FETCH_PAGES_KEY) !== "false",
     nativeOpenai: localStorage.getItem(WEB_SEARCH_NATIVE_OPENAI_KEY) !== "false",
+    // DeepSeek has its own server-side search API (/v1/tools/search); use it
+    // with the already stored DeepSeek key instead of fetching search pages
+    // from the browser.
+    deepseek: localStorage.getItem(WEB_SEARCH_DEEPSEEK_KEY) !== "false",
+    // Some blockers (for example Vivaldi's tracker blocker) block search
+    // requests made by extension pages. Retry in a temporary background tab
+    // where the same request is a normal first-party navigation.
+    tabFallback: localStorage.getItem(WEB_SEARCH_TAB_FALLBACK_KEY) !== "false",
     // Session-only: set when the endpoint rejects tool use / native search.
     toolsUnsupported: false,
     nativeUnsupported: false,
@@ -1300,6 +1324,12 @@ function syncWebSearchControls() {
   if (dom.webSearchNativeOpenai) {
     dom.webSearchNativeOpenai.checked = state.webSearch.nativeOpenai;
   }
+  if (dom.webSearchDeepseek) {
+    dom.webSearchDeepseek.checked = state.webSearch.deepseek;
+  }
+  if (dom.webSearchTabFallback) {
+    dom.webSearchTabFallback.checked = state.webSearch.tabFallback;
+  }
 }
 
 function saveWebSearchSetting(key, value) {
@@ -1325,6 +1355,8 @@ async function hydrateWebSearchSettings() {
       WEB_SEARCH_ENABLED_KEY,
       WEB_SEARCH_FETCH_PAGES_KEY,
       WEB_SEARCH_NATIVE_OPENAI_KEY,
+      WEB_SEARCH_DEEPSEEK_KEY,
+      WEB_SEARCH_TAB_FALLBACK_KEY,
     ]);
   } catch (error) {
     return;
@@ -1333,6 +1365,8 @@ async function hydrateWebSearchSettings() {
     [WEB_SEARCH_ENABLED_KEY, "enabled"],
     [WEB_SEARCH_FETCH_PAGES_KEY, "fetchPages"],
     [WEB_SEARCH_NATIVE_OPENAI_KEY, "nativeOpenai"],
+    [WEB_SEARCH_DEEPSEEK_KEY, "deepseek"],
+    [WEB_SEARCH_TAB_FALLBACK_KEY, "tabFallback"],
   ];
   for (const [key, field] of fields) {
     if (typeof stored[key] === "boolean") {
@@ -1351,6 +1385,8 @@ function bindWebSearchSettings() {
   const fields = [
     [dom.webSearchFetchPages, WEB_SEARCH_FETCH_PAGES_KEY, "fetchPages"],
     [dom.webSearchNativeOpenai, WEB_SEARCH_NATIVE_OPENAI_KEY, "nativeOpenai"],
+    [dom.webSearchDeepseek, WEB_SEARCH_DEEPSEEK_KEY, "deepseek"],
+    [dom.webSearchTabFallback, WEB_SEARCH_TAB_FALLBACK_KEY, "tabFallback"],
   ];
   for (const [element, key, field] of fields) {
     if (!element) continue;
@@ -1359,7 +1395,78 @@ function bindWebSearchSettings() {
       saveWebSearchSetting(key, !!element.checked);
     });
   }
+  if (dom.webSearchTest) {
+    dom.webSearchTest.addEventListener("click", testWebSearch);
+  }
   syncWebSearchControls();
+}
+
+// Runs one sample search from the settings panel and reports which engine
+// answered (or the exact reason each one failed). Network blocks are the most
+// common cause of "web search doesn't work", so this makes them diagnosable
+// without reading the browser console.
+async function testWebSearch() {
+  if (!dom.webSearchTest || dom.webSearchTest.disabled) return;
+  const button = dom.webSearchTest;
+  const status = dom.webSearchTestStatus;
+  button.disabled = true;
+  if (status) status.textContent = t("search.testRunning", "Testing search...");
+  try {
+    let outcome = null;
+    const errors = [];
+    const deepseekConn = deepseekSearchConnection(null);
+    if (deepseekConn) {
+      try {
+        const results = await deepseekSearch("OpenAI", {
+          apiKey: deepseekConn.apiKey,
+          baseUrl: deepseekConn.baseUrl,
+          maxResults: 3,
+        });
+        if (!results.length) {
+          throw new Error("DeepSeek search returned no results");
+        }
+        outcome = { results, engine: "deepseek" };
+      } catch (error) {
+        errors.push(`deepseek: ${(error && error.message) || error}`);
+      }
+    }
+    if (!outcome) {
+      try {
+        outcome = await searchWebDetailed("OpenAI", { maxResults: 3 });
+      } catch (error) {
+        errors.push((error && error.message) || String(error));
+      }
+    }
+    if (!outcome && state.webSearch.tabFallback) {
+      try {
+        outcome = await searchViaBackgroundTab("OpenAI", { maxResults: 3 });
+      } catch (error) {
+        errors.push(`background tab: ${(error && error.message) || error}`);
+      }
+    }
+    if (!outcome) throw new Error(errors.join("; ") || "Search failed");
+    const first = outcome.results[0];
+    const engine =
+      outcome.engine === "bing-tab"
+        ? "Bing (background tab)"
+        : outcome.engine === "deepseek"
+          ? "DeepSeek"
+          : outcome.engine;
+    const note = errors.length ? ` (${errors.join("; ")})` : "";
+    if (status) {
+      status.textContent = `${t("search.testOk", "Search works")}: ${engine} (${
+        outcome.results.length
+      })${first ? ` - ${first.title}` : ""}${note}`;
+    }
+  } catch (error) {
+    if (status) {
+      status.textContent = `${t("search.testFailed", "Search failed")}: ${
+        (error && error.message) || error
+      }`;
+    }
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function applyInterfaceScale(value) {
@@ -4489,6 +4596,27 @@ function webSearchModelName(override) {
   return dom.serverModel.value.trim();
 }
 
+// Resolves the DeepSeek Search API connection (same provider/key as the chat)
+// when the current connection is DeepSeek and the setting is on.
+function deepseekSearchConnection(override) {
+  if (!state.webSearch.deepseek) return null;
+  const useCloud = override ? override.mode === "cloud" : state.mode === "cloud";
+  if (!useCloud) return null;
+  const provider = override ? override.provider : dom.cloudProvider.value;
+  if (provider !== "deepseek") return null;
+  const apiKey = String(
+    override ? override.apiKey : dom.cloudApiKey.value
+  ).trim();
+  if (!apiKey) return null;
+  const baseUrl = String(
+    override
+      ? override.baseUrl
+      : dom.cloudApiUrl.value.trim() || cloudProviderDefaults("deepseek").url
+  ).replace(/\/+$/, "");
+  if (!baseUrl) return null;
+  return { apiKey, baseUrl };
+}
+
 // Endpoint/model capability only: can this connection receive a `tools` array
 // at all? Ignores the toggle and the session-only fallback flags.
 function isWebSearchEndpointSupported(override) {
@@ -4529,6 +4657,120 @@ function isNativeOpenaiSearchAvailable(override, messages) {
     return false;
   }
   return true;
+}
+
+// ---------- Background-tab search fallback ----------
+//
+// Some browsers (for example Vivaldi with its tracker blocker) reject search
+// requests made by an extension page, while the same search URL works when it
+// is opened as a normal tab. Retry in a temporary background tab, read the
+// rendered results, and close the tab again.
+const TAB_SEARCH_TIMEOUT_MS = 15000;
+const TAB_SEARCH_RESULT_LIMIT = 6;
+
+// Serialized by the scripting API, so it must not reference anything outside
+// its own arguments.
+function extractBingResultsFromTab(limit) {
+  const results = [];
+  for (const block of document.querySelectorAll("li.b_algo")) {
+    const anchor = block.querySelector("h2 a");
+    if (!anchor) continue;
+    const href = anchor.getAttribute("href") || "";
+    if (!/^https?:\/\//i.test(href)) continue;
+    const snippetEl = block.querySelector(
+      ".b_caption p, .b_lineclamp, .b_algoSlug, p"
+    );
+    results.push({
+      title: (anchor.textContent || "").replace(/\s+/g, " ").trim(),
+      url: href,
+      snippet: (snippetEl?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 300),
+    });
+    if (results.length >= limit) break;
+  }
+  return results;
+}
+
+async function waitForTabComplete(tabId, timeoutMs, signal) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (signal && signal.aborted) throw tabSearchAbortError();
+    let tab = null;
+    try {
+      tab = await api.tabs.get(tabId);
+    } catch (error) {
+      throw new Error("Search tab was closed");
+    }
+    if (tab && tab.status === "complete") return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Search tab timed out");
+}
+
+function tabSearchAbortError() {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function searchViaBackgroundTab(query, options = {}) {
+  const limit = Math.min(
+    10,
+    Math.max(1, parseInt(options.maxResults, 10) || TAB_SEARCH_RESULT_LIMIT)
+  );
+  const url =
+    "https://www.bing.com/search?q=" +
+    encodeURIComponent(query) +
+    "&count=10";
+  let tab = null;
+  try {
+    tab = await api.tabs.create({ url, active: false });
+    if (!tab || tab.id === undefined || tab.id === null) {
+      throw new Error("Could not open a search tab");
+    }
+    await waitForTabComplete(tab.id, TAB_SEARCH_TIMEOUT_MS, options.signal);
+    if (options.signal && options.signal.aborted) throw tabSearchAbortError();
+    const injection = await api.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: extractBingResultsFromTab,
+      args: [limit],
+    });
+    const raw = Array.isArray(injection) && injection[0] ? injection[0].result : [];
+    const results = [];
+    for (const item of Array.isArray(raw) ? raw : []) {
+      const decoded = decodeBingRedirect(item.url);
+      if (!/^https?:\/\//i.test(decoded)) continue;
+      results.push({ ...item, url: decoded });
+    }
+    if (!results.length) throw new Error("Bing returned no results");
+    const pages = {};
+    if (options.fetchPages) {
+      const targets = results.slice(0, DEFAULT_PAGE_LIMIT);
+      const texts = await Promise.all(
+        targets.map((result) =>
+          fetchPageText(result.url, { signal: options.signal })
+        )
+      );
+      targets.forEach((result, index) => {
+        if (texts[index]) pages[result.url] = texts[index];
+      });
+    }
+    return {
+      results,
+      engine: "bing-tab",
+      block: buildToolResultBlock(query, results, pages),
+    };
+  } finally {
+    if (tab && tab.id !== undefined && tab.id !== null) {
+      try {
+        await api.tabs.remove(tab.id);
+      } catch (error) {
+        // The tab may already be closed.
+      }
+    }
+  }
 }
 
 function addMessageSources(list, results) {
@@ -4758,19 +5000,88 @@ async function runStreamedChat({
           (args && typeof args.query === "string" ? args.query.trim() : "") ||
           userText;
         setStatus(`${t("search.searching", "Searching the web")}: ${query}...`);
-        let block;
-        try {
-          const outcome = await searchForTool(query, {
-            signal: controller.signal,
-            fetchPages: state.webSearch.fetchPages,
-          });
-          addMessageSources(sources, outcome.results);
-          block = outcome.block;
-        } catch (searchError) {
-          if (controller.signal.aborted) throw searchError;
-          const detail =
-            searchError && searchError.message ? searchError.message : searchError;
-          block = `Web search failed: ${detail}. Answer with what you know and say the lookup failed.`;
+        let block = "";
+        let deepseekDetail = "";
+        const deepseekConn = deepseekSearchConnection(override);
+        if (deepseekConn) {
+          setStatus(
+            `${t(
+              "search.searchingDeepseek",
+              "Searching with DeepSeek"
+            )}: ${query}...`
+          );
+          try {
+            const results = await deepseekSearch(query, {
+              apiKey: deepseekConn.apiKey,
+              baseUrl: deepseekConn.baseUrl,
+              maxResults: DEFAULT_RESULT_LIMIT,
+              needContent: state.webSearch.fetchPages,
+              originalQuestion: userText,
+              signal: controller.signal,
+            });
+            if (!results.length) {
+              throw new Error("DeepSeek search returned no results");
+            }
+            const pages = {};
+            if (state.webSearch.fetchPages) {
+              for (const item of results) {
+                const excerpt = (item.content || item.summary || "").slice(
+                  0,
+                  DEFAULT_PAGE_CHARS
+                );
+                if (excerpt) pages[item.url] = excerpt;
+              }
+            }
+            addMessageSources(sources, results);
+            block = buildToolResultBlock(query, results, pages);
+          } catch (error) {
+            if (controller.signal.aborted) throw error;
+            deepseekDetail = `deepseek: ${
+              (error && error.message) || error
+            }`;
+          }
+        }
+        if (!block) {
+          try {
+            const outcome = await searchForTool(query, {
+              signal: controller.signal,
+              fetchPages: state.webSearch.fetchPages,
+            });
+            addMessageSources(sources, outcome.results);
+            block = outcome.block;
+          } catch (searchError) {
+            if (controller.signal.aborted) throw searchError;
+            const directDetail =
+              searchError && searchError.message
+                ? searchError.message
+                : searchError;
+            const detailPrefix = [deepseekDetail, directDetail]
+              .filter(Boolean)
+              .join("; ");
+            if (state.webSearch.tabFallback) {
+              setStatus(
+                `${t(
+                  "search.searchingTab",
+                  "Searching in a background tab"
+                )}: ${query}...`
+              );
+              try {
+                const outcome = await searchViaBackgroundTab(query, {
+                  signal: controller.signal,
+                  fetchPages: state.webSearch.fetchPages,
+                });
+                addMessageSources(sources, outcome.results);
+                block = outcome.block;
+              } catch (tabError) {
+                if (controller.signal.aborted) throw tabError;
+                const tabDetail =
+                  tabError && tabError.message ? tabError.message : tabError;
+                block = `Web search failed: ${detailPrefix}; background tab: ${tabDetail}. Answer with what you know and say the lookup failed.`;
+              }
+            } else {
+              block = `Web search failed: ${detailPrefix}. Answer with what you know and say the lookup failed.`;
+            }
+          }
         }
         agentMessages.push({
           role: "tool",
