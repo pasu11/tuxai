@@ -4850,7 +4850,9 @@ async function runStreamedChat({
     return;
   }
 
-  trimHistoryToFit(estimated, contextSize);
+  // Trim only the outgoing request. The stored transcript is never cut, so
+  // history and saved sessions keep the full conversation.
+  let requestHistory = trimHistoryToFit(state.messages, estimated, contextSize);
 
   const attachmentNames = state.attachments
     .map((a) => a.name)
@@ -4906,7 +4908,7 @@ async function runStreamedChat({
   }
   const buildAgentMessages = (agentMessages) => [
     ...preamble,
-    ...state.messages.map((item) => ({ role: item.role, content: item.content })),
+    ...requestHistory.map((item) => ({ role: item.role, content: item.content })),
     userRequestMessage,
     ...agentMessages,
   ];
@@ -4934,7 +4936,8 @@ async function runStreamedChat({
     while (true) {
       const toolsActive =
         isWebSearchAvailable(override) && round < MAX_SEARCH_ROUNDS;
-      trimHistoryToFit(
+      requestHistory = trimHistoryToFit(
+        state.messages,
         estimated + messagesTokens(agentMessages),
         contextSize
       );
@@ -5373,8 +5376,16 @@ async function saveTabs() {
   try {
     await api.storage.local.set({ [CHAT_TABS_KEY]: payload });
   } catch (error) {
-    // No-op.
+    reportStorageError("chats", error);
   }
+}
+
+// Saving used to fail silently, which looked like lost chat history. Surface it
+// in the status area instead.
+function reportStorageError(scope, error) {
+  const detail = error && error.message ? error.message : String(error || "");
+  setStatus(`Could not save ${scope}: ${detail || "storage error"}`);
+  console.error(`[TuxAI] Failed to save ${scope}`, error);
 }
 
 let tabsSaveTimer = null;
@@ -5529,7 +5540,7 @@ async function saveChatSessions() {
   try {
     await api.storage.local.set({ [CHAT_SESSIONS_KEY]: state.sessions });
   } catch (error) {
-    // No-op.
+    reportStorageError("chat history", error);
   }
 }
 
@@ -6734,9 +6745,11 @@ function messagesTokens(messages) {
   return messages.reduce((sum, message) => sum + estimateTokens(message.content) + 8, 0);
 }
 
-function trimHistoryToFit(newMessageTokens, contextSize) {
+// Returns the slice of `messages` that fits `contextSize`. Pure: the caller's
+// transcript is never mutated, so trimming only affects the request payload.
+function trimHistoryToFit(messages, newMessageTokens, contextSize) {
   const available = contextSize - 800;
-  let history = [...state.messages];
+  const history = [...messages];
   let removed = 0;
 
   while (history.length > 0 && messagesTokens(history) + newMessageTokens > available) {
@@ -6749,11 +6762,12 @@ function trimHistoryToFit(newMessageTokens, contextSize) {
   }
 
   if (removed > 0) {
-    state.messages = history;
     appendSystemMessage(
-      "Older messages were trimmed to keep this conversation within the selected context size."
+      `Older messages (${removed}) are omitted from this request only to fit the selected context size. The full chat is still saved.`
     );
   }
+
+  return history;
 }
 
 // ---------- Streaming ----------

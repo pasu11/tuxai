@@ -59,3 +59,10 @@ web search: per-engine errors, Bing RSS + cn.bing.com fallback, background-tab r
 
 1.3.2
 web search: use DeepSeek Search API (/v1/tools/search) with the existing DeepSeek key when chatting with DeepSeek; optional toggle; fallback to keyless search + background tab; DeepSeek search toggle in settings
+
+1.3.3
+history: trimming now only affects the outgoing request; the full chat is kept in storage and the history list
+
+1.3.4
+chat storage: unlimitedStorage permission so long chats can keep growing
+context-size hint now explains that only the request is trimmed
