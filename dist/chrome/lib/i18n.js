@@ -56,7 +56,8 @@
       "ui.reset": "Reset",
       "ui.textSizeHint": "Default: 14px. Range: 10–24px.",
       "ui.contextSize": "Context size",
-      "ui.contextSizeHint": "Used for history trimming.",
+      "ui.contextSizeHint":
+        "History sent to the model. Saved chats are never trimmed.",
       "ui.interfaceSize": "Interface size",
       "ui.interfaceSizeHint":
         "Scales the whole sidebar interface. Default: 100%.",
@@ -270,7 +271,7 @@
       "ui.reset": "重置",
       "ui.textSizeHint": "默认 14px，范围 10–24px。",
       "ui.contextSize": "上下文长度",
-      "ui.contextSizeHint": "用于历史记录裁剪。",
+      "ui.contextSizeHint": "发送给模型的历史长度；保存的聊天记录不会被裁剪。",
       "ui.interfaceSize": "界面缩放",
       "ui.interfaceSizeHint": "缩放整个侧边栏界面，默认 100%。",
       "ui.language": "语言",

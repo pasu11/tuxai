@@ -1,5 +1,9 @@
 # TuxAI — project notes
 
+##version increment
+
+After completing any change, change version number by +0.01 and add brief change note to what's news.txt
+
 ## Always package after finishing a task
 
 After completing any change, run the full build + package step so `dist/` is up to date:
