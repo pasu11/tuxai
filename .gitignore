@@ -13,3 +13,7 @@ git-credential-tuxai
 gitupload.sh
 package.sh
 what does build.mjs do.txt
+
+# CRX signing key — must never be committed
+# (already leaked in public history; rotate it, see notes)
+dist/tuxai.pem
