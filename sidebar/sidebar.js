@@ -3763,15 +3763,95 @@ function appendMessage(role, content, options = {}) {
   return messageEl;
 }
 
-function updateAssistantContent(messageEl, rawText) {
-  if (messageEl._contentEl) {
-    messageEl._contentEl.innerHTML = renderMarkdown(rawText || "");
-    decorateCodeBlocks(messageEl._contentEl);
-    if (messageEl._answerBubble) {
-      messageEl._answerBubble.hidden = !String(rawText || "").trim();
-    }
-    scrollStreamingMessageIntoView(messageEl);
+// Streaming updates are coalesced: an SSE chunk can carry hundreds of deltas,
+// and re-rendering the whole markdown/reasoning body for every single delta is
+// O(n^2) DOM work. Long reasoning traces (e.g. DeepSeek thinking output) used
+// to freeze the sidebar this way. Raw text is still accumulated immediately;
+// the DOM is updated at most once per STREAM_RENDER_INTERVAL_MS.
+const STREAM_RENDER_INTERVAL_MS = 80;
+// WeakMap so finished/removed messages do not keep their elements alive.
+const streamRenderState = new WeakMap();
+
+function renderAssistantContent(messageEl) {
+  if (!messageEl._contentEl) return;
+  const rawText = String(messageEl._rawText || "");
+  messageEl._contentEl.innerHTML = renderMarkdown(rawText);
+  decorateCodeBlocks(messageEl._contentEl);
+  if (messageEl._answerBubble) {
+    messageEl._answerBubble.hidden = !rawText.trim();
   }
+  scrollStreamingMessageIntoView(messageEl);
+}
+
+function renderReasoningContent(messageEl) {
+  if (!messageEl._reasoningBox) return;
+  createAnswerBubble(messageEl);
+  messageEl._reasoningBox.hidden = false;
+  if (!messageEl._reasoningBox.classList.contains("expanded")) {
+    messageEl._reasoningBox.classList.add("expanded");
+  }
+  messageEl._reasoningContentEl.textContent = String(
+    messageEl._rawReasoning || ""
+  );
+  scrollStreamingMessageIntoView(messageEl);
+}
+
+function cancelStreamRender(messageEl) {
+  const pending = streamRenderState.get(messageEl);
+  if (!pending) return;
+  if (pending.frame) cancelAnimationFrame(pending.frame);
+  if (pending.timer) clearTimeout(pending.timer);
+  streamRenderState.delete(messageEl);
+}
+
+function flushStreamRender(messageEl) {
+  const pending = streamRenderState.get(messageEl);
+  if (!pending) return;
+  const renderAnswer = pending.answer;
+  const renderReasoning = pending.reasoning;
+  pending.answer = false;
+  pending.reasoning = false;
+  if (pending.frame) cancelAnimationFrame(pending.frame);
+  if (pending.timer) clearTimeout(pending.timer);
+  pending.frame = 0;
+  pending.timer = 0;
+  pending.last = performance.now();
+  if (!messageEl.isConnected) {
+    streamRenderState.delete(messageEl);
+    return;
+  }
+  if (renderReasoning) renderReasoningContent(messageEl);
+  if (renderAnswer) renderAssistantContent(messageEl);
+}
+
+function scheduleStreamRender(messageEl, kind) {
+  if (!messageEl) return;
+  let pending = streamRenderState.get(messageEl);
+  if (!pending) {
+    pending = { answer: false, reasoning: false, frame: 0, timer: 0, last: 0 };
+    streamRenderState.set(messageEl, pending);
+  }
+  pending[kind] = true;
+  if (pending.frame || pending.timer) return;
+
+  pending.frame = requestAnimationFrame(() => {
+    pending.frame = 0;
+    const wait = STREAM_RENDER_INTERVAL_MS - (performance.now() - pending.last);
+    if (wait > 0) {
+      pending.timer = setTimeout(() => {
+        pending.timer = 0;
+        flushStreamRender(messageEl);
+      }, wait);
+    } else {
+      flushStreamRender(messageEl);
+    }
+  });
+}
+
+function updateAssistantContent(messageEl, rawText) {
+  messageEl._rawText = String(rawText || "");
+  cancelStreamRender(messageEl);
+  renderAssistantContent(messageEl);
 }
 
 // In thinking mode the reasoning is shown in its own box; put the final
@@ -3826,13 +3906,9 @@ function createReasoningBox(messageEl) {
 
 function updateReasoningBox(messageEl, rawText) {
   if (!messageEl._reasoningBox) return;
-  createAnswerBubble(messageEl);
-  messageEl._reasoningBox.hidden = false;
-  if (!messageEl._reasoningBox.classList.contains("expanded")) {
-    messageEl._reasoningBox.classList.add("expanded");
-  }
-  messageEl._reasoningContentEl.textContent = rawText;
-  scrollStreamingMessageIntoView(messageEl);
+  messageEl._rawReasoning = String(rawText || "");
+  cancelStreamRender(messageEl);
+  renderReasoningContent(messageEl);
 }
 
 function isChatNearBottom(threshold = 48) {
@@ -3905,11 +3981,34 @@ function jumpToLatest() {
   updateScrollToBottomButton();
 }
 
+let pendingStatusText = null;
+let statusFrame = 0;
+
 function setStatus(text) {
+  // A direct status update supersedes any coalesced streaming update so the
+  // queued text cannot overwrite it a frame later.
+  pendingStatusText = null;
+  if (statusFrame) {
+    cancelAnimationFrame(statusFrame);
+    statusFrame = 0;
+  }
   if (dom.chatStatus) {
     dom.chatStatus.textContent = text;
     dom.chatStatus.title = text;
   }
+}
+
+// The status line is updated for every streamed delta; coalescing it keeps
+// fast models from turning that into thousands of DOM writes per second.
+function scheduleStatus(text) {
+  pendingStatusText = text;
+  if (statusFrame) return;
+  statusFrame = requestAnimationFrame(() => {
+    statusFrame = 0;
+    const next = pendingStatusText;
+    pendingStatusText = null;
+    if (next !== null) setStatus(next);
+  });
 }
 
 function plainTextFromMarkdown(markdown) {
@@ -4956,13 +5055,13 @@ async function runStreamedChat({
             fullText += delta;
             roundText += delta;
             assistantEl._rawText = fullText;
-            updateAssistantContent(assistantEl, fullText);
-            setStatus("Generating...");
+            scheduleStreamRender(assistantEl, "answer");
+            scheduleStatus("Generating...");
           },
           onReasoning: (delta) => {
             assistantEl._rawReasoning += delta;
-            updateReasoningBox(assistantEl, assistantEl._rawReasoning);
-            setStatus("Reasoning...");
+            scheduleStreamRender(assistantEl, "reasoning");
+            scheduleStatus("Reasoning...");
           },
         });
       } catch (error) {
@@ -5143,6 +5242,8 @@ async function runStreamedChat({
     state.abortController = null;
     updateSendButton();
     renderTabs();
+    // Flush any coalesced text before the reply is considered finished.
+    flushStreamRender(assistantEl);
     scrollStreamingMessageIntoView(assistantEl);
   }
 }
@@ -7198,8 +7299,16 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     buffer = parts.pop();
     const handler = getHandler();
 
+    // A provider can buffer the whole reply and deliver it in one burst. Yield
+    // periodically so the coalesced renderer can paint and the sidebar stays
+    // responsive instead of draining thousands of deltas in one task.
+    let lastYield = performance.now();
     for (const part of parts) {
       if (handler(part)) return finalizeResult(result);
+      if (performance.now() - lastYield >= 40) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        lastYield = performance.now();
+      }
     }
   }
 
