@@ -191,6 +191,8 @@
       "msg.clickExpand": "Click to expand",
       "msg.clickCollapse": "Click to collapse",
       "msg.nothingToSpeak": "There is nothing to read aloud.",
+      "msg.incomplete":
+        "The connection ended before the reply finished - this answer may be incomplete.",
 
       "status.connecting": "Connecting...",
       "status.generating": "Generating...",
@@ -400,6 +402,7 @@
       "msg.clickExpand": "点击展开",
       "msg.clickCollapse": "点击收起",
       "msg.nothingToSpeak": "没有可朗读的内容。",
+      "msg.incomplete": "连接在回复结束前中断，这段回答可能不完整。",
 
       "status.connecting": "连接中……",
       "status.generating": "生成中……",

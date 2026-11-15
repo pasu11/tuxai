@@ -1800,6 +1800,17 @@ body.settings-open .history-panel {
   color: inherit;
 }
 
+/* Warning shown when a stream ended without the provider's end marker. */
+.message.ai .message-note {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .reasoning-box {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);

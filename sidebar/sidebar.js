@@ -3702,6 +3702,24 @@ function renderMessageSources(messageEl, sources) {
   block.appendChild(list);
 }
 
+// Appended under a reply whose stream ended without the provider's end marker
+// ([DONE] / finish_reason / stream-end / message_stop). The partial text is
+// kept; this note only tells the user it may be incomplete.
+function appendInterruptedNote(messageEl) {
+  if (!messageEl) return null;
+  if (messageEl._noteEl && messageEl._noteEl.isConnected) return messageEl._noteEl;
+  const bubble = messageEl.querySelector(".bubble") || messageEl;
+  const note = document.createElement("div");
+  note.className = "message-note";
+  note.textContent = t(
+    "msg.incomplete",
+    "The connection ended before the reply finished - this answer may be incomplete."
+  );
+  bubble.appendChild(note);
+  messageEl._noteEl = note;
+  return note;
+}
+
 function appendMessage(role, content, options = {}) {
   const messageEl = document.createElement("div");
   messageEl.className = `message ${role}`;
@@ -3748,6 +3766,10 @@ function appendMessage(role, content, options = {}) {
 
   if (role === "ai" && Array.isArray(options.sources) && options.sources.length) {
     renderMessageSources(messageEl, options.sources);
+  }
+
+  if (role === "ai" && options.interrupted) {
+    appendInterruptedNote(messageEl);
   }
 
   if (role !== "system") {
@@ -5031,6 +5053,9 @@ async function runStreamedChat({
     const sources = [];
     const agentMessages = [];
     let round = 0;
+    // The last round's stream result, used to tell a finished reply from one
+    // whose connection ended without the provider's end marker.
+    let lastResult = null;
 
     while (true) {
       const toolsActive =
@@ -5065,6 +5090,7 @@ async function runStreamedChat({
           },
         });
       } catch (error) {
+        lastResult = null;
         if (!controller.signal.aborted && nativeSearch && isNativeSearchUnsupportedError(error)) {
           state.webSearch.nativeUnsupported = true;
           roundText = "";
@@ -5080,6 +5106,8 @@ async function runStreamedChat({
         }
         throw error;
       }
+
+      lastResult = result;
 
       if (result && Array.isArray(result.annotations)) {
         addMessageSources(sources, result.annotations);
@@ -5198,6 +5226,10 @@ async function runStreamedChat({
     const storedUserText = attachmentNames
       ? `${userText}\n\n[Attached: ${attachmentNames}]`
       : userText;
+    // `terminated === false` means the stream stopped without [DONE], a
+    // finish_reason or any other end marker: keep the partial text but say so.
+    const interrupted = !!lastResult && lastResult.terminated === false;
+
     state.messages.push({ role: "user", content: storedUserText });
     if (fullText.trim()) {
       if (sources.length) renderMessageSources(assistantEl, sources);
@@ -5206,8 +5238,14 @@ async function runStreamedChat({
         content: fullText,
         label: messageLabel,
         ...(sources.length ? { sources } : {}),
+        ...(interrupted ? { interrupted: true } : {}),
       });
-      setStatus("Done");
+      if (interrupted) {
+        const note = appendInterruptedNote(assistantEl);
+        setStatus(note ? note.textContent : "Done");
+      } else {
+        setStatus("Done");
+      }
     } else {
       assistantEl.remove();
       setStatus("No response content");
@@ -5436,6 +5474,7 @@ async function loadTabs() {
                 ? m.content
                 : String(m.content || ""),
             ...(m.label ? { label: m.label } : {}),
+            ...(m.interrupted ? { interrupted: true } : {}),
           }))
         : [],
       attachments: [],
@@ -5469,6 +5508,7 @@ async function saveTabs() {
         content:
           typeof m.content === "string" ? m.content : String(m.content || ""),
         ...(m.label ? { label: m.label } : {}),
+        ...(m.interrupted ? { interrupted: true } : {}),
       })),
       createdAt: tab.createdAt,
       updatedAt: tab.updatedAt,
@@ -5663,6 +5703,7 @@ async function saveTabSession(tab) {
       ...(Array.isArray(m.sources) && m.sources.length
         ? { sources: m.sources.map((s) => ({ title: s.title, url: s.url })) }
         : {}),
+      ...(m.interrupted ? { interrupted: true } : {}),
     })),
   };
 
@@ -5683,7 +5724,11 @@ function renderChatFromState() {
   for (const item of state.messages) {
     // Stored messages use the API role "assistant"; the UI class is "ai".
     const role = item.role === "assistant" ? "ai" : item.role;
-    appendMessage(role, item.content, { label: item.label, sources: item.sources });
+    appendMessage(role, item.content, {
+      label: item.label,
+      sources: item.sources,
+      interrupted: item.interrupted,
+    });
   }
   scrollChatToBottom(true);
 }
@@ -7096,7 +7141,15 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  const result = { toolCalls: [], annotations: [], finishReason: "" };
+  // `terminated` records whether the provider actually ended the stream (an
+  // end marker of some kind). A connection that just closes leaves it false,
+  // which is how the caller detects a truncated reply.
+  const result = {
+    toolCalls: [],
+    annotations: [],
+    finishReason: "",
+    terminated: false,
+  };
 
   const mergeToolCall = (toolCall) => {
     if (!toolCall) return;
@@ -7140,19 +7193,29 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     if (Array.isArray(message.tool_calls)) {
       message.tool_calls.forEach((toolCall) => mergeToolCall(toolCall));
     }
-    return !!data.done;
+    if (data.done) {
+      result.terminated = true;
+      return true;
+    }
+    return false;
   };
 
   const handleSseLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) return false;
     const payload = trimmed.slice(5).trim();
-    if (payload === "[DONE]") return true;
+    if (payload === "[DONE]") {
+      result.terminated = true;
+      return true;
+    }
     try {
       const data = JSON.parse(payload);
       const first = (data.choices && data.choices[0]) || {};
       const delta = first.delta || {};
-      if (first.finish_reason) result.finishReason = first.finish_reason;
+      if (first.finish_reason) {
+        result.finishReason = first.finish_reason;
+        result.terminated = true;
+      }
       if ((delta.reasoning_content || delta.reasoning) && onReasoning) {
         onReasoning(delta.reasoning_content || delta.reasoning);
       }
@@ -7173,6 +7236,10 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     if (payload === "[DONE]") return true;
     try {
       const data = JSON.parse(payload);
+      if (data.type === "message_stop") {
+        result.terminated = true;
+        return true;
+      }
       if (data.type === "content_block_delta" && data.delta) {
         if (data.delta.type === "text_delta" && data.delta.text) {
           onDelta(data.delta.text);
@@ -7202,6 +7269,9 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
         data.candidates[0] &&
         data.candidates[0].content &&
         data.candidates[0].content.parts;
+      if (data.candidates && data.candidates[0] && data.candidates[0].finishReason) {
+        result.terminated = true;
+      }
       if (Array.isArray(parts)) {
         const text = parts.map((part) => part.text || "").join("");
         if (text) onDelta(text);
@@ -7220,7 +7290,10 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     try {
       const data = JSON.parse(payload);
       if (data.text) onDelta(data.text);
-      if (data.event_type === "stream-end") return true;
+      if (data.event_type === "stream-end") {
+        result.terminated = true;
+        return true;
+      }
     } catch (error) {
       // Ignore malformed SSE chunks.
     }
@@ -7252,6 +7325,7 @@ async function consumeStream(response, kind, onDelta, onReasoning) {
     } else if (type === "response.output_text.annotation.added" && data.annotation) {
       result.annotations.push(data.annotation);
     } else if (type === "response.completed") {
+      result.terminated = true;
       const output = data.response && data.response.output;
       if (Array.isArray(output)) {
         for (const item of output) {

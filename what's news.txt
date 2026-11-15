@@ -69,3 +69,6 @@ context-size hint now explains that only the request is trimmed
 
 1.3.5
 streaming: coalesce reasoning/answer re-renders and status updates (fixes sidebar freeze on long DeepSeek thinking traces)
+
+1.3.6
+streaming: detect a stream that ends without the provider end marker ([DONE] / finish_reason / stream-end / message_stop) and flag the saved reply as possibly incomplete instead of treating it as finished
